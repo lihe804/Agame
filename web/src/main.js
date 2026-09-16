@@ -57,7 +57,8 @@ function renderScene(scene, sceneCamera) {
   renderer.render(scene, sceneCamera);
 }
 
-const camera = new THREE.PerspectiveCamera(48, window.innerWidth / window.innerHeight, 0.1, 900);
+// 远裁剪面 3000：天空球半径 1400（要包住潮汐远征 646m 航路，球对面最远点约 2046）
+const camera = new THREE.PerspectiveCamera(48, window.innerWidth / window.innerHeight, 0.1, 3000);
 
 const scorePanel = document.getElementById('score-panel');
 const scoreValueEl = document.getElementById('score-value');
