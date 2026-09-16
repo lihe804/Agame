@@ -2808,17 +2808,21 @@ function addSkyDynamicInstances(group, entries) {
 function addSkyRotorInstances(group, rotors, style = 'sky') {
   if (!rotors.length) return;
 
-  const cage = new THREE.InstancedMesh(
-    new THREE.CylinderGeometry(1, 1, 1, 24, 4, true),
-    new THREE.MeshBasicMaterial({
-      color: 0xffffff,
-      wireframe: true,
-      transparent: true,
-      opacity: 0.13,
-      depthWrite: false
-    }),
-    rotors.length
-  );
+  // 登天云梯的旋转阶梯不再套线框笼子：24×4 段的 wireframe 圆柱在台阶外形成“网格墙”，
+  // 远看糊住台阶、挡住视线。sky 关直接省略 cage，只保留中轴与顶灯。
+  const cage = style === 'sky'
+    ? null
+    : new THREE.InstancedMesh(
+        new THREE.CylinderGeometry(1, 1, 1, 24, 4, true),
+        new THREE.MeshBasicMaterial({
+          color: 0xffffff,
+          wireframe: true,
+          transparent: true,
+          opacity: 0.13,
+          depthWrite: false
+        }),
+        rotors.length
+      );
   const poles = new THREE.InstancedMesh(
     new THREE.CylinderGeometry(0.055, 0.075, 1, 10),
     new THREE.MeshStandardMaterial({ color: 0x667381, roughness: 0.52, metalness: 0.5 }),
@@ -2848,8 +2852,10 @@ function addSkyRotorInstances(group, rotors, style = 'sky') {
     quat.identity();
     scale.set(rotor.radius, height, rotor.radius);
     matrix.compose(pos, quat, scale);
-    cage.setMatrixAt(index, matrix);
-    cage.setColorAt(index, color.setHex(accent));
+    if (cage) {
+      cage.setMatrixAt(index, matrix);
+      cage.setColorAt(index, color.setHex(accent));
+    }
 
     const poleHeight = height + 0.45;
     scale.set(1, poleHeight, 1);
@@ -2863,12 +2869,15 @@ function addSkyRotorInstances(group, rotors, style = 'sky') {
     caps.setColorAt(index, color.setHex(accent));
   });
 
-  cage.instanceMatrix.needsUpdate = true;
-  cage.instanceColor.needsUpdate = true;
+  if (cage) {
+    cage.instanceMatrix.needsUpdate = true;
+    cage.instanceColor.needsUpdate = true;
+  }
   poles.instanceMatrix.needsUpdate = true;
   caps.instanceMatrix.needsUpdate = true;
   caps.instanceColor.needsUpdate = true;
-  group.add(cage, poles, caps);
+  group.add(poles, caps);
+  if (cage) group.add(cage);
 }
 
 function addOceanProps(group, platforms) {
