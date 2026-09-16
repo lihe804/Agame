@@ -1,9 +1,10 @@
 /**
- * 长关切换专项 CDP 检查：
- *   1. 验证按钮和 T 键按固定顺序切换三个 500 台长关
- *   2. 验证切换不会清空积分、宝箱或检查点
- *   3. 验证三个长关存档互不覆盖，星跃切换后恢复 3 / 3 充能
- *   4. 验证移动端两个 HUD 操作按钮不重叠且不越界
+ * 关卡切换专项 CDP 检查：
+ *   1. 验证按钮和 T 键按 sky → ocean → comet → free → sky 循环
+ *   2. 验证自由模式隐藏三个长关，但 sea / height 训练计时可用
+ *   3. 验证自由模式不写入长关积分、宝箱、检查点或 lastCourse
+ *   4. 验证三个长关存档互不覆盖，星跃切换后恢复 3 / 3 充能
+ *   5. 验证移动端两个 HUD 操作按钮不重叠且不越界
  *
  * 用法: node tools/cdp-switch-check.mjs [url]
  */
@@ -204,8 +205,148 @@ const afterKey = await evaluate(`(() => {
 assert(afterKey.activeCourse === 'comet', 'T 键没有切换到星跃追光');
 assert(afterKey.charges === 3 && afterKey.savedCharge === 3, '切到星跃没有恢复 3 / 3 充能');
 assert(afterKey.checkpoint === initial.comet, '没有回到星轨检查点');
-assert(afterKey.button === '切换：登天云梯', '星轨切换按钮文案错误');
+assert(afterKey.button === '切换：自由模式', '星轨切换按钮文案错误');
 assert(afterKey.savedLastCourse === 'comet', 'T 键切换后没有保存 lastCourse');
+
+await key('KeyT', 't');
+await sleep(180);
+const afterFree = await evaluate(`(() => {
+  const state = window.__wb.state;
+  const saved = JSON.parse(localStorage.getItem('wb-course-progress-v2'));
+  return {
+    activeCourse: state.activeCourse,
+    currentCourse: state.run.currentCourse,
+    checkpoint: state.run.checkpoint,
+    timerRunning: state.timer.running,
+    timerHidden: document.getElementById('timer').classList.contains('hidden'),
+    visibility: {
+      sky: state.beach.courseVisual('sky').group.visible,
+      ocean: state.beach.courseVisual('ocean').group.visible,
+      comet: state.beach.courseVisual('comet').group.visible,
+      sea: state.beach.courseVisual('sea').group.visible,
+      height: state.beach.courseVisual('height').group.visible
+    },
+    button: document.getElementById('course-switch').textContent,
+    stageText: document.getElementById('score-stage').textContent,
+    points: state.score.points,
+    savedLastCourse: saved.lastCourse
+  };
+})()`);
+assert(afterFree.activeCourse === 'free', '切换顺序没有进入自由模式');
+assert(afterFree.currentCourse === null && afterFree.checkpoint === null, '自由模式仍绑定了长关检查点');
+assert(!afterFree.timerRunning && afterFree.timerHidden, '进入自由模式没有停止训练计时');
+assert(
+  !afterFree.visibility.sky &&
+  !afterFree.visibility.ocean &&
+  !afterFree.visibility.comet &&
+  afterFree.visibility.sea &&
+  afterFree.visibility.height,
+  '自由模式没有正确隐藏长关或训练关'
+);
+assert(afterFree.button === '切换：登天云梯', '自由模式切换按钮文案错误');
+assert(afterFree.stageText.includes('自由训练'), '自由模式 HUD 文案错误');
+assert(afterFree.points === 4321, '进入自由模式后积分发生变化');
+assert(afterFree.savedLastCourse === 'comet', '自由模式错误覆盖了 lastCourse');
+
+const freeBefore = await evaluate(`(() => {
+  const state = window.__wb.state;
+  const reward = state.beach.courseVisual('sky').rewards.find((item) => !item.opened);
+  const savedBefore = localStorage.getItem('wb-course-progress-v2');
+  return {
+    savedBefore,
+    rewardId: reward.id,
+    rewardOpened: reward.opened
+  };
+})()`);
+
+await evaluate(`(() => {
+  const state = window.__wb.state;
+  const start = state.beach.courseVisual('sea').platforms[0];
+  state.run.onStart.sea = false;
+  state.player.pos.set(start.x, start.top, start.z);
+  state.player.vel.set(0, 0, 0);
+  state.player.vy = 0;
+  state.player.onGround = true;
+})()`);
+await sleep(260);
+const freeSeaTimer = await evaluate(`(() => {
+  const state = window.__wb.state;
+  return {
+    running: state.timer.running,
+    course: state.timer.course,
+    activeCourse: state.activeCourse,
+    visible: !document.getElementById('timer').classList.contains('hidden')
+  };
+})()`);
+assert(
+  freeSeaTimer.running &&
+  freeSeaTimer.course === 'sea' &&
+  freeSeaTimer.activeCourse === 'free' &&
+  freeSeaTimer.visible,
+  '自由模式的深海训练没有独立计时'
+);
+
+await evaluate(`(() => {
+  const state = window.__wb.state;
+  const start = state.beach.courseVisual('height').platforms[0];
+  state.run.onStart.height = false;
+  state.player.pos.set(start.x, start.top, start.z);
+  state.player.vel.set(0, 0, 0);
+  state.player.vy = 0;
+  state.player.onGround = true;
+})()`);
+await sleep(260);
+const freeHeightTimer = await evaluate(`(() => {
+  const state = window.__wb.state;
+  return {
+    running: state.timer.running,
+    course: state.timer.course,
+    activeCourse: state.activeCourse
+  };
+})()`);
+assert(
+  freeHeightTimer.running &&
+  freeHeightTimer.course === 'height' &&
+  freeHeightTimer.activeCourse === 'free',
+  '自由模式的环屋训练没有独立计时'
+);
+
+await evaluate(`(() => {
+  const state = window.__wb.state;
+  const reward = state.beach.courseVisual('sky').rewards.find((item) => item.id === ${JSON.stringify(freeBefore.rewardId)});
+  const p = reward.platform;
+  state.player.pos.set(p.x, p.top, p.z);
+  state.player.vel.set(0, 0, 0);
+  state.player.vy = 0;
+  state.player.onGround = true;
+})()`);
+await sleep(220);
+const freeAfter = await evaluate(`(() => {
+  const state = window.__wb.state;
+  const reward = state.beach.courseVisual('sky').rewards.find((item) => item.id === ${JSON.stringify(freeBefore.rewardId)});
+  const savedAfter = localStorage.getItem('wb-course-progress-v2');
+  return {
+    activeCourse: state.activeCourse,
+    rewardOpened: reward.opened,
+    savedAfter,
+    savedLastCourse: JSON.parse(savedAfter).lastCourse,
+    checkpoints: {
+      sky: state.run.checkpoints.sky?.number || null,
+      ocean: state.run.checkpoints.ocean?.number || null,
+      comet: state.run.checkpoints.comet?.number || null
+    }
+  };
+})()`);
+assert(freeAfter.activeCourse === 'free', '自由模式训练时切回了正式长关');
+assert(!freeBefore.rewardOpened && !freeAfter.rewardOpened, '自由模式打开了长关宝箱');
+assert(freeAfter.savedAfter === freeBefore.savedBefore, '自由模式写入了长关存档');
+assert(freeAfter.savedLastCourse === 'comet', '自由模式覆盖了已保存的目标关卡');
+assert(
+  freeAfter.checkpoints.sky === initial.sky &&
+  freeAfter.checkpoints.ocean === initial.ocean &&
+  freeAfter.checkpoints.comet === initial.comet,
+  '自由模式覆盖了长关检查点'
+);
 
 await key('KeyT', 't');
 await sleep(180);
@@ -216,6 +357,8 @@ const afterLoop = await evaluate(`(() => {
     activeCourse: state.activeCourse,
     points: state.score.points,
     checkpoint: state.run.checkpoint?.number,
+    timerRunning: state.timer.running,
+    timerHidden: document.getElementById('timer').classList.contains('hidden'),
     savedLastCourse: saved.lastCourse,
     checkpoints: {
       sky: saved.courses.sky.checkpointNumber,
@@ -228,6 +371,7 @@ assert(afterLoop.activeCourse === 'sky', '切换顺序没有回到登天云梯')
 assert(afterLoop.points === 4321, '完整切换轮次后积分发生变化');
 assert(afterLoop.checkpoint === initial.sky, '没有回到天空关卡检查点');
 assert(afterLoop.savedLastCourse === 'sky', '切回天空后没有保存 lastCourse');
+assert(!afterLoop.timerRunning && afterLoop.timerHidden, '离开自由模式后训练计时仍在运行');
 assert(
   afterLoop.checkpoints.sky === initial.sky &&
   afterLoop.checkpoints.ocean === initial.ocean &&
@@ -270,6 +414,10 @@ console.log('switch:', JSON.stringify({
   initial,
   afterButton,
   afterKey,
+  afterFree,
+  freeSeaTimer,
+  freeHeightTimer,
+  freeAfter,
   afterLoop,
   mobile
 }));

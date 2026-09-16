@@ -1,7 +1,7 @@
 /**
  * 长关专项 CDP 检查：
  *   1. 校验 500 平台、20 个宝箱、20 种潮汐机制、动态平台与最高高度
- *   2. 校验玩法计时、计时 HUD 与旧榜单存档已完全移除
+ *   2. 校验三个正式长关不计时，sea / height 训练关可独立计时
  *   3. 检查旋转/浮动平台确实在移动
  *   4. 直接触发第一座阶段宝箱，核对积分、HUD 和检查点
  *   5. 输出起点、旋转区、宝箱区和终点的截图
@@ -137,19 +137,114 @@ await sleep(350);
 await evaluate("document.querySelector('.card[data-char=\"0\"]').click()");
 await sleep(2200);
 
-const removedGameplayTimers = await evaluate(`(() => ({
+const timerUi = await evaluate(`(() => ({
   timerElement: !!document.getElementById('timer'),
   timerState: Object.prototype.hasOwnProperty.call(window.__wb.state, 'timer'),
   boardKeys: Object.keys(localStorage).filter((key) => key.startsWith('wb-board-'))
 }))()`);
-console.log('removed gameplay timers:', JSON.stringify(removedGameplayTimers));
+console.log('timer ui:', JSON.stringify(timerUi));
 if (
-  removedGameplayTimers.timerElement ||
-  removedGameplayTimers.timerState ||
-  removedGameplayTimers.boardKeys.length > 0
+  !timerUi.timerElement ||
+  !timerUi.timerState ||
+  timerUi.boardKeys.length > 0
 ) {
-  throw new Error('页面仍残留玩法计时或旧榜单存档');
+  throw new Error('训练计时 HUD 缺失或旧榜单存档仍然存在');
 }
+
+const longStartTimer = await evaluate(`(() => {
+  const state = window.__wb.state;
+  const start = state.beach.courseVisual('sky').platforms[0];
+  state.run.onStart.sky = false;
+  state.run.currentCourse = null;
+  state.player.pos.set(start.x, start.top, start.z);
+  state.player.vel.set(0, 0, 0);
+  state.player.vy = 0;
+  state.player.onGround = true;
+  return true;
+})()`);
+await sleep(260);
+const longTimerResult = await evaluate(`(() => ({
+  running: window.__wb.state.timer.running,
+  course: window.__wb.state.timer.course,
+  activeCourse: window.__wb.state.activeCourse
+}))()`);
+console.log('long-course timer:', JSON.stringify(longTimerResult));
+if (!longStartTimer || longTimerResult.running || longTimerResult.activeCourse !== 'sky') {
+  throw new Error('正式长关启动了训练计时');
+}
+
+await evaluate(`(() => {
+  const state = window.__wb.state;
+  const start = state.beach.courseVisual('sea').platforms[0];
+  state.run.onStart.sea = false;
+  state.player.pos.set(start.x, start.top, start.z);
+  state.player.vel.set(0, 0, 0);
+  state.player.vy = 0;
+  state.player.onGround = true;
+})()`);
+await sleep(260);
+const seaTimerStarted = await evaluate(`(() => ({
+  running: window.__wb.state.timer.running,
+  course: window.__wb.state.timer.course,
+  visible: !document.getElementById('timer').classList.contains('hidden')
+}))()`);
+console.log('sea timer start:', JSON.stringify(seaTimerStarted));
+if (!seaTimerStarted.running || seaTimerStarted.course !== 'sea' || !seaTimerStarted.visible) {
+  throw new Error('深海训练没有启动计时');
+}
+
+await evaluate(`(() => {
+  const state = window.__wb.state;
+  const start = state.beach.courseVisual('height').platforms[0];
+  state.run.onStart.height = false;
+  state.player.pos.set(start.x, start.top, start.z);
+  state.player.vel.set(0, 0, 0);
+  state.player.vy = 0;
+  state.player.onGround = true;
+})()`);
+await sleep(260);
+const heightTimerStarted = await evaluate(`(() => ({
+  running: window.__wb.state.timer.running,
+  course: window.__wb.state.timer.course,
+  currentCourse: window.__wb.state.run.currentCourse,
+  onStartHeight: window.__wb.state.run.onStart.height,
+  player: {
+    x: window.__wb.state.player.pos.x,
+    y: window.__wb.state.player.pos.y,
+    z: window.__wb.state.player.pos.z
+  }
+}))()`);
+console.log('height timer start:', JSON.stringify(heightTimerStarted));
+if (!heightTimerStarted.running || heightTimerStarted.course !== 'height') {
+  throw new Error('环屋训练没有切换并启动计时');
+}
+
+await evaluate(`(() => {
+  const state = window.__wb.state;
+  state.run.currentCourse = 'height';
+  state.player.pos.set(0, 1.28, 18);
+  state.player.vel.set(0, 0, 0);
+  state.player.vy = 0;
+  state.player.onGround = true;
+})()`);
+await sleep(180);
+const heightTimerStopped = await evaluate(`(() => ({
+  running: window.__wb.state.timer.running,
+  hidden: document.getElementById('timer').classList.contains('hidden'),
+  hint: document.getElementById('hint').textContent
+}))()`);
+console.log('height timer stop:', JSON.stringify(heightTimerStopped));
+if (heightTimerStopped.running || !heightTimerStopped.hidden || !heightTimerStopped.hint.includes('计时已取消')) {
+  throw new Error('环屋训练落回地面后没有停止计时');
+}
+
+await evaluate(`(() => {
+  const state = window.__wb.state;
+  state.activeCourse = 'sky';
+  state.run.currentCourse = 'sky';
+  state.run.checkpoint = state.run.checkpoints.sky;
+  state.beach.setViewMode('sky');
+})()`);
 
 const skyStats = await evaluate(`(() => {
   const state = window.__wb.state;
@@ -449,6 +544,29 @@ if (oceanStats.endZ > -180) throw new Error('潮汐远征没有向远海延伸')
 if (!oceanStats.nextStageLocked) throw new Error('潮汐远征没有阻止跨阶段捷径');
 if (oceanStats.rewardNumbers.some((number, index) => number !== (index + 1) * 25)) {
   throw new Error('潮汐远征宝箱没有按每 25 个平台分布');
+}
+
+const oceanReachability = await evaluate(`(() => {
+  const state = window.__wb.state;
+  const visual = state.beach.courseVisual('ocean');
+  const minX = Math.min(...visual.platforms.map((platform) => platform.x - platform.half));
+  const maxX = Math.max(...visual.platforms.map((platform) => platform.x + platform.half));
+  const minZ = Math.min(...visual.platforms.map((platform) => platform.z - platform.half));
+  const maxZ = Math.max(...visual.platforms.map((platform) => platform.z + platform.half));
+  return {
+    limits: { ...state.player.limits },
+    bounds: { minX, maxX, minZ, maxZ }
+  };
+})()`);
+console.log('ocean reachability:', JSON.stringify(oceanReachability));
+if (
+  oceanReachability.limits.xMin > oceanReachability.bounds.minX - 4 ||
+  oceanReachability.limits.xMax < oceanReachability.bounds.maxX + 4 ||
+  oceanReachability.limits.zMin > oceanReachability.bounds.minZ - 4 ||
+  oceanReachability.limits.zMax < oceanReachability.bounds.maxZ + 4 ||
+  oceanReachability.limits.zMin > -235
+) {
+  throw new Error('玩家动态边界没有完整覆盖潮汐远海航路');
 }
 
 const moving = await evaluate(`(() => {

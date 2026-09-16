@@ -67,16 +67,58 @@ const dashStatusEl = document.getElementById('dash-status');
 const courseSwitchButton = document.getElementById('course-switch');
 const hudSubEl = document.getElementById('hud-sub');
 const saveStatusEl = document.getElementById('save-status');
+const timerEl = document.getElementById('timer');
 
 const PROGRESS_KEY = 'wb-course-progress-v2';
 const LEGACY_PROGRESS_KEY = 'wb-sky-progress-v1';
 const SAVE_COURSE_IDS = COURSES.filter((course) => course.platforms.length >= 500).map((course) => course.id);
+const MODE_IDS = [...SAVE_COURSE_IDS, 'free'];
+const TRAINING_COURSE_IDS = ['sea', 'height'];
 const COURSE_BY_ID = new Map(COURSES.map((course) => [course.id, course]));
 const COURSE_STARTS = COURSES.map((course) => ({ course, start: course.platforms[0] }));
 const STATIC_COURSE_GOAL_IDS = COURSES
   .filter((course) => !SAVE_COURSE_IDS.includes(course.id))
   .map((course) => course.id);
 const DASH_MAX = 3;
+const FREE_SPAWN = { x: 0, z: 4 };
+
+const WORLD_LIMITS = (() => {
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minZ = Infinity;
+  let maxZ = -Infinity;
+  for (const course of COURSES) {
+    for (const platform of course.platforms) {
+      let halfX = platform.half;
+      let halfZ = platform.half;
+      const motion = platform.motion;
+      if (motion?.type === 'orbit') {
+        minX = Math.min(minX, motion.cx - motion.radius - halfX);
+        maxX = Math.max(maxX, motion.cx + motion.radius + halfX);
+        minZ = Math.min(minZ, motion.cz - motion.radius - halfZ);
+        maxZ = Math.max(maxZ, motion.cz + motion.radius + halfZ);
+        continue;
+      }
+      if (motion?.type === 'shuttle') {
+        halfX += Math.abs(motion.axisX * motion.amplitude);
+        halfZ += Math.abs(motion.axisZ * motion.amplitude);
+      } else if (motion?.type === 'wave') {
+        halfX += Math.abs(motion.amplitudeX);
+        halfZ += Math.abs(motion.amplitudeZ);
+      }
+      minX = Math.min(minX, platform.x - halfX);
+      maxX = Math.max(maxX, platform.x + halfX);
+      minZ = Math.min(minZ, platform.z - halfZ);
+      maxZ = Math.max(maxZ, platform.z + halfZ);
+    }
+  }
+  return {
+    xMin: Math.floor(minX - 12),
+    xMax: Math.ceil(maxX + 12),
+    zMin: Math.floor(minZ - 12),
+    zMax: Math.ceil(maxZ + 12)
+  };
+})();
 
 function loadProgress() {
   let saved = null;
@@ -120,6 +162,12 @@ const state = {
   selectOrbit: 0,
   score: savedProgress,
   activeCourse: savedProgress.lastCourse,
+  timer: {
+    running: false,
+    start: 0,
+    course: null,
+    elapsed: 0
+  },
   run: {
     currentCourse: null,
     onStart: Object.fromEntries(COURSES.map((c) => [c.id, false])),
@@ -147,16 +195,31 @@ function saveProgress() {
     localStorage.setItem(PROGRESS_KEY, JSON.stringify({
       points: state.score.points,
       courses,
-      lastCourse: state.activeCourse
+      lastCourse: SAVE_COURSE_IDS.includes(state.activeCourse)
+        ? state.activeCourse
+        : (SAVE_COURSE_IDS.includes(state.score.lastCourse) ? state.score.lastCourse : 'sky')
     }));
   } catch (_) {}
 }
 
 let scoreBumpTimer = 0;
 function updateScoreUI(bump = false) {
+  scoreValueEl.textContent = state.score.points.toLocaleString('zh-CN');
+  if (state.activeCourse === 'free') {
+    scoreStageEl.textContent = '自由训练 · 深海 / 环屋计时可用';
+    dashStatusEl.classList.add('hidden');
+    saveStatusEl.textContent = '自由模式不写入三个长关存档';
+    if (!bump) return;
+    scorePanel.classList.remove('bump');
+    void scorePanel.offsetWidth;
+    scorePanel.classList.add('bump');
+    clearTimeout(scoreBumpTimer);
+    scoreBumpTimer = setTimeout(() => scorePanel.classList.remove('bump'), 360);
+    return;
+  }
+
   const course = COURSE_BY_ID.get(state.activeCourse);
   const progress = state.score.courses[state.activeCourse];
-  scoreValueEl.textContent = state.score.points.toLocaleString('zh-CN');
   const prefix = state.activeCourse === 'ocean'
     ? '潮汐阶段'
     : state.activeCourse === 'comet'
@@ -182,11 +245,12 @@ function updateScoreUI(bump = false) {
 }
 
 function updateCourseSwitchButton() {
-  const currentIndex = Math.max(0, SAVE_COURSE_IDS.indexOf(state.activeCourse));
-  const nextId = SAVE_COURSE_IDS[(currentIndex + 1) % SAVE_COURSE_IDS.length];
+  const currentIndex = Math.max(0, MODE_IDS.indexOf(state.activeCourse));
+  const nextId = MODE_IDS[(currentIndex + 1) % MODE_IDS.length];
   const nextCourse = COURSE_BY_ID.get(nextId);
-  courseSwitchButton.textContent = '切换：' + (nextCourse?.name || '下一关');
-  courseSwitchButton.title = '切换到' + (nextCourse?.name || '下一关') + '（T）';
+  const nextName = nextId === 'free' ? '自由模式' : (nextCourse?.name || '下一关');
+  courseSwitchButton.textContent = '切换：' + nextName;
+  courseSwitchButton.title = '切换到' + nextName + '（T）';
 }
 
 function showHint(message, duration = 3200) {
@@ -196,6 +260,48 @@ function showHint(message, duration = 3200) {
   hint._suppressUntil = performance.now() + duration;
   clearTimeout(hint._t);
   hint._t = setTimeout(() => hint.classList.add('hidden'), duration);
+}
+
+function stopTrainingTimer() {
+  const wasRunning = state.timer.running;
+  const elapsed = wasRunning
+    ? Math.max(0, (performance.now() - state.timer.start) / 1000)
+    : state.timer.elapsed;
+  state.timer.running = false;
+  state.timer.course = null;
+  state.timer.elapsed = elapsed;
+  timerEl.classList.add('hidden');
+  return wasRunning ? elapsed : null;
+}
+
+function startTrainingTimer(courseId) {
+  if (!TRAINING_COURSE_IDS.includes(courseId)) return;
+  state.timer.running = true;
+  state.timer.course = courseId;
+  state.timer.start = performance.now();
+  state.timer.elapsed = 0;
+  timerEl.textContent = '0.00 秒';
+  timerEl.classList.remove('hidden');
+}
+
+function updateTrainingTimer() {
+  if (!state.timer.running) return;
+  state.timer.elapsed = Math.max(0, (performance.now() - state.timer.start) / 1000);
+  timerEl.textContent = state.timer.elapsed.toFixed(2) + ' 秒';
+}
+
+function finishTrainingCourse(courseId) {
+  if (!state.timer.running || state.timer.course !== courseId) return null;
+  const elapsed = stopTrainingTimer();
+  const course = COURSE_BY_ID.get(courseId);
+  if (elapsed != null) {
+    showHint(
+      '「' + (course?.name || '训练关卡') + '」训练完成 · 用时 ' +
+      elapsed.toFixed(2) + ' 秒',
+      4600
+    );
+  }
+  return elapsed;
 }
 
 const input = createInput(canvas);
@@ -287,6 +393,7 @@ function enterExplore(index) {
   model.rotation.y = c.modelYaw;
 
   state.player = new Player(model, c.height);
+  state.player.limits = { ...WORLD_LIMITS };
   scene.add(state.player.group);
 
   state.selected = index;
@@ -298,6 +405,7 @@ function enterExplore(index) {
   document.getElementById('hud-name').textContent = c.name;
   state.run.currentCourse = null;
   for (const id in state.run.onStart) state.run.onStart[id] = false;
+  stopTrainingTimer();
 
   for (const id of SAVE_COURSE_IDS) {
     const course = COURSE_BY_ID.get(id);
@@ -314,6 +422,7 @@ function enterExplore(index) {
     if (id === 'comet' && checkpoint.number > 1) progress.dashCharges = DASH_MAX;
   }
   if (!SAVE_COURSE_IDS.includes(state.activeCourse)) state.activeCourse = 'sky';
+  state.score.lastCourse = state.activeCourse;
   state.run.checkpoint = state.run.checkpoints[state.activeCourse];
   const activeDefinition = COURSE_BY_ID.get(state.activeCourse);
   hudSubEl.textContent = activeDefinition.name + ' · 500 阶';
@@ -365,9 +474,14 @@ window.addEventListener('keydown', (e) => {
       doorSfx(door.open);
     }
   } else if (e.code === 'KeyR') {
+    if (state.activeCourse === 'free') {
+      respawnAtFreeStart('已返回自由训练起点');
+      return;
+    }
     const courseId = SAVE_COURSE_IDS.includes(state.run.currentCourse) ? state.run.currentCourse : state.activeCourse;
     const checkpoint = state.run.checkpoints[courseId];
     const course = COURSE_BY_ID.get(courseId);
+    if (!checkpoint || !course) return;
     const start = course.platforms[0];
     const nearStart = Math.hypot(state.player.pos.x - start.x, state.player.pos.z - start.z) < 8;
     const nearCheckpoint = checkpoint && Math.hypot(
@@ -394,6 +508,7 @@ window.addEventListener('keydown', (e) => {
 });
 
 function backToSelect() {
+  stopTrainingTimer();
   state.mode = 'select';
   input.lockEnabled = false; // 选角页恢复鼠标
   hud.classList.add('hidden');
@@ -403,6 +518,7 @@ function backToSelect() {
 }
 
 function resetAllProgress() {
+  stopTrainingTimer();
   try {
     localStorage.removeItem(PROGRESS_KEY);
     localStorage.removeItem(LEGACY_PROGRESS_KEY);
@@ -420,6 +536,7 @@ function resetAllProgress() {
     state.run.checkpoints[id] = null;
   }
   state.activeCourse = 'sky';
+  state.score.lastCourse = 'sky';
   state.run.currentCourse = null;
   state.run.checkpoint = null;
   for (const id in state.run.onStart) state.run.onStart[id] = false;
@@ -463,8 +580,12 @@ window.addEventListener('resize', () => {
 
 function switchCourse() {
   if (state.mode !== 'explore' || !state.player) return;
-  const currentIndex = Math.max(0, SAVE_COURSE_IDS.indexOf(state.activeCourse));
-  const nextId = SAVE_COURSE_IDS[(currentIndex + 1) % SAVE_COURSE_IDS.length];
+  const currentIndex = Math.max(0, MODE_IDS.indexOf(state.activeCourse));
+  const nextId = MODE_IDS[(currentIndex + 1) % MODE_IDS.length];
+  if (nextId === 'free') {
+    enterFreeMode();
+    return;
+  }
   const nextCourse = COURSE_BY_ID.get(nextId);
 
   respawnAtCheckpoint(
@@ -473,11 +594,43 @@ function switchCourse() {
   );
 }
 
+function enterFreeMode(hintMessage = null) {
+  if (state.mode !== 'explore' || !state.player) return;
+  stopTrainingTimer();
+  state.activeCourse = 'free';
+  state.run.currentCourse = null;
+  state.run.checkpoint = null;
+  for (const id in state.run.onStart) state.run.onStart[id] = false;
+  state.beach.setViewMode('free');
+  respawnAtFreeStart(hintMessage || '已切换至自由模式 · 三个长关已隐藏');
+}
+
+function respawnAtFreeStart(hintMessage = null) {
+  if (state.mode !== 'explore' || !state.player) return;
+  stopTrainingTimer();
+  const y = terrainHeight(FREE_SPAWN.x, FREE_SPAWN.z) + 0.04;
+  state.player.respawn({ x: FREE_SPAWN.x, y, z: FREE_SPAWN.z });
+  state.player.group.position.copy(state.player.pos);
+  state.rig.initialized = false;
+  if (state.activeCourse === 'free') {
+    state.run.currentCourse = null;
+    state.run.checkpoint = null;
+    hudSubEl.textContent = '自由模式 · 可自由训练';
+    state.beach.setViewMode('free');
+    updateScoreUI(false);
+    updateCourseSwitchButton();
+  }
+  showHint(hintMessage || '已返回自由训练起点', 2200);
+}
+
 function respawnAtCheckpoint(courseId = state.activeCourse, hintMessage = null) {
+  stopTrainingTimer();
+  if (!SAVE_COURSE_IDS.includes(courseId)) return;
   const checkpoint = state.run.checkpoints[courseId];
   if (!state.player || !checkpoint) return;
   const course = COURSE_BY_ID.get(courseId);
   state.activeCourse = courseId;
+  state.score.lastCourse = courseId;
   state.run.currentCourse = courseId;
   state.run.checkpoint = checkpoint;
   state.beach.setViewMode(courseId);
@@ -501,6 +654,7 @@ function respawnAtCheckpoint(courseId = state.activeCourse, hintMessage = null) 
 }
 
 function respawnAtSeaStart() {
+  stopTrainingTimer();
   const sea = COURSE_BY_ID.get('sea');
   const start = sea.platforms[0];
   state.player.respawn({ x: start.x, y: start.top, z: start.z });
@@ -511,6 +665,7 @@ function respawnAtSeaStart() {
 }
 
 function collectReward(reward) {
+  if (!reward || !SAVE_COURSE_IDS.includes(reward.courseId) || state.activeCourse === 'free') return;
   const opened = state.beach.openReward(reward.id);
   if (!opened) return;
 
@@ -524,6 +679,7 @@ function collectReward(reward) {
   state.run.currentCourse = opened.courseId;
   state.run.checkpoint = opened.platform;
   state.activeCourse = opened.courseId;
+  state.score.lastCourse = opened.courseId;
   state.beach.setViewMode(opened.courseId);
   state.beach.setCourseStage(opened.courseId, opened.stage);
   hudSubEl.textContent = COURSE_BY_ID.get(opened.courseId).name + ' · 500 阶';
@@ -613,6 +769,7 @@ function frame(now) {
     state.player.update(dt, input, state.rig.yaw, playerWorld);
     state.beach.update(state.time, dt, state.player);
     state.rig.update(dt, state.player.pos, state.player.height, drag, state.beach.occluders);
+    updateTrainingTimer();
 
     // 星跃充能台：落到发光圆台即补满，不要求先耗尽。
     if (state.activeCourse === 'comet' && state.player.onGround && cometProgress.dashCharges < DASH_MAX) {
@@ -630,14 +787,23 @@ function frame(now) {
     for (const { course: c, start: s } of COURSE_STARTS) {
       const on = Math.abs(tp.x - s.x) < s.half + 0.05 && Math.abs(tp.z - s.z) < s.half + 0.05 && Math.abs(tp.y - s.top) < 0.25;
       if (on && !state.run.onStart[c.id]) {
-        state.run.currentCourse = c.id;
-        if (SAVE_COURSE_IDS.includes(c.id)) {
+        const isLongCourse = SAVE_COURSE_IDS.includes(c.id);
+        if (isLongCourse && state.activeCourse === 'free') {
+          // 自由模式隐藏长关；即使测试直接移动玩家，也不得改动长关状态。
+        } else {
+          state.run.currentCourse = c.id;
+        }
+        if (isLongCourse && state.activeCourse !== 'free') {
+          stopTrainingTimer();
           state.activeCourse = c.id;
+          state.score.lastCourse = c.id;
           state.run.checkpoint = state.run.checkpoints[c.id] || s;
           state.beach.setViewMode(c.id);
           hudSubEl.textContent = c.name + ' · 500 阶';
           updateScoreUI(false);
           updateCourseSwitchButton();
+        } else if (TRAINING_COURSE_IDS.includes(c.id)) {
+          startTrainingTimer(c.id);
         }
       }
       state.run.onStart[c.id] = on;
@@ -652,7 +818,16 @@ function frame(now) {
       splashSfx();
       respawnAtCheckpoint('comet');
     } else if (runCourse === 'sea' && tp.y < WATER_LEVEL - 0.05 && tp.z < -3.2) {
+      stopTrainingTimer();
       respawnAtSeaStart();
+      showHint('落水，本次深海训练已重置', 2200);
+    } else if (
+      runCourse === 'height' &&
+      state.player.onGround &&
+      Math.abs(tp.y - terrainHeight(tp.x, tp.z)) < 0.15
+    ) {
+      const elapsed = stopTrainingTimer();
+      if (elapsed != null) showHint('落回地面，本次环屋计时已取消', 2400);
     } else if (
       runCourse &&
       state.player.onGround &&
@@ -696,10 +871,11 @@ function frame(now) {
       }
     }
 
-    // 关卡终点（注册表驱动）：靠近宝箱后开箱并播放完成反馈。
-    const goalCount = STATIC_COURSE_GOAL_IDS.length + 1;
-    for (let i = 0; i < goalCount; i++) {
-      const courseId = i === 0 ? state.activeCourse : STATIC_COURSE_GOAL_IDS[i - 1];
+    // 关卡终点：长关只给完成反馈，sea / height 训练关显示本次用时。
+    const goalIds = SAVE_COURSE_IDS.includes(state.activeCourse)
+      ? [state.activeCourse, ...STATIC_COURSE_GOAL_IDS]
+      : STATIC_COURSE_GOAL_IDS;
+    for (const courseId of goalIds) {
       const goal = state.beach.goals[courseId];
       if (!goal || goal.opened) continue;
       const p = state.player.pos;
@@ -708,7 +884,11 @@ function frame(now) {
         state.beach.courseVisual(courseId).spawnConfetti();
         goalSfx();
         const course = COURSE_BY_ID.get(courseId);
-        showHint('「' + course.name + '」关卡完成！宝箱已开启', 4200);
+        if (TRAINING_COURSE_IDS.includes(courseId)) {
+          finishTrainingCourse(courseId);
+        } else {
+          showHint('「' + course.name + '」关卡完成！宝箱已开启', 4200);
+        }
       }
     }
 

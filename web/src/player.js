@@ -230,8 +230,8 @@ export class Player {
     this.supportPlatform = null;
     this._motionState = { speed: 0, inWater: false, dashing: false };
 
-    // 西侧星轨延伸到 x≈-105；zMin 覆盖潮汐远征，落水由各自检查点逻辑接手
-    this.limits = { xMin: -115, xMax: 70, zMin: -235, zMax: 45 };
+    // 西侧星轨延伸到 x≈-105；zMin 覆盖潮汐远征约 -3000 的远海终点。
+    this.limits = { xMin: -115, xMax: 82, zMin: -3012, zMax: 45 };
   }
 
   update(dt, input, camYaw, world = {}) {

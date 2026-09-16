@@ -274,6 +274,25 @@ html, body {
   backdrop-filter: blur(10px);
 }
 
+/* ---------- 训练计时器 ---------- */
+
+#timer {
+  position: absolute;
+  top: 24px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 24px;
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  color: var(--text);
+  background: var(--panel);
+  border: 1px solid rgba(240, 184, 72, 0.55);
+  border-radius: 999px;
+  backdrop-filter: blur(10px);
+  font-variant-numeric: tabular-nums;
+}
+
 /* ---------- 加载 ---------- */
 
 #loading {
@@ -303,6 +322,7 @@ html, body {
   #hud-name, #hud-sub { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #score-panel { top: 66px; right: 14px; min-width: 132px; padding: 9px 12px 8px; }
   #score-value { font-size: 21px; }
+  #timer { top: 14px; }
   .hud-keys { display: none; }
   .hud-actions { right: 14px; bottom: 14px; }
   #course-switch, #back-btn { padding: 8px 13px; font-size: 12px; }
