@@ -1697,7 +1697,9 @@ export function groundAt(x, z, refY = Infinity, supportOut = null, candidates = 
 /* ---------------- 天空 ---------------- */
 
 function makeSky() {
-  const geo = new THREE.SphereGeometry(500, 32, 16);
+  // 半径 1400：必须包住整条潮汐远征航路（实测到 z≈-645，离原点最远约 646），
+  // 否则后段台阶会跑到天空球外面，背景/天空直接断掉。配合 main.js 相机远裁剪 3000。
+  const geo = new THREE.SphereGeometry(1400, 40, 20);
   const mat = new THREE.ShaderMaterial({
     side: THREE.BackSide,
     depthWrite: false,
@@ -4325,8 +4327,10 @@ export function buildBeachScene(options = {}) {
         if (visual.longCourse) visual.group.visible = courseId === id;
       }
       if (id === 'ocean') {
-        scene.fog.near = 42;
-        scene.fog.far = 210;
+        // 潮汐远征是 500 台折返长航路（实测到 z≈-645）：雾太近会让后段台阶整片融进背景色，
+        // 看起来“被贴图包住”，所以把可视距离放到能看清整条航路。
+        scene.fog.near = 80;
+        scene.fog.far = 1200;
       } else if (id === 'comet') {
         scene.fog.near = 58;
         scene.fog.far = 300;
