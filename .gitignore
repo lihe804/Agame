@@ -25,3 +25,6 @@ desktop.ini
 *.swp
 *.swo
 *~
+
+#skills
+.agents/

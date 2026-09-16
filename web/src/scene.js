@@ -3202,11 +3202,453 @@ function makeLongConfetti(group) {
   };
 }
 
+/* ================= 终极大奖（每关终点的惊喜） =================
+ * 每关终点不再放普通宝箱，而是一个“会憋大招”的巨型惊喜礼盒：
+ *   待机 → 缓慢呼吸、缎带微亮、光环低速旋转
+ *   蓄力 → 玩家进入约 11m 内开始颤抖、向上冒金色火星、光环加速（给足惊喜预兆）
+ *   揭晓 → 盒盖掀开，金色大奖从盒中升起，光柱冲天、冲击波扩散、
+ *          三波烟花在四周炸开；之后大奖悬浮旋转、光柱常亮
+ * 配色按关卡 id（sea / height / sky / ocean / comet）区分。 */
+
+const PRIZE_PALETTES = {
+  sea: { accent: 0x7fe3ff, prize: 0xffe9a8, burst: [0x9ff0ff, 0x6fd0ff, 0xfff3c4, 0xffffff] },
+  height: { accent: 0xffd166, prize: 0xffd166, burst: [0xffd166, 0xff9f6b, 0xfff3c4, 0xff7a5c] },
+  sky: { accent: 0xffc94a, prize: 0xffd76b, burst: [0xffd76b, 0x9ecbff, 0xfff3c4, 0xffe59a] },
+  ocean: { accent: 0x8ee2bd, prize: 0xd9ffe9, burst: [0x8ee2bd, 0x73ddd7, 0xf6ffe0, 0xffffff] },
+  comet: { accent: 0xb9a2ff, prize: 0xd9c8ff, burst: [0xb9a2ff, 0x8ef1ff, 0xffd6f6, 0xffffff] }
+};
+
+/** 加色混合的光晕贴图（光柱根部的“灯泡”） */
+function makePrizeGlowSprite(color, size = 5) {
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = 128;
+  const ctx = cv.getContext('2d');
+  // 直接用十六进制分量拼 CSS 颜色，避免 THREE.Color 的色彩空间换算把颜色压暗
+  const rgb = ((color >> 16) & 255) + ',' + ((color >> 8) & 255) + ',' + (color & 255);
+  const grad = ctx.createRadialGradient(64, 64, 2, 64, 64, 64);
+  grad.addColorStop(0, 'rgba(255,255,255,0.95)');
+  grad.addColorStop(0.3, 'rgba(' + rgb + ',0.5)');
+  grad.addColorStop(1, 'rgba(' + rgb + ',0)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 128, 128);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({
+    map: new THREE.CanvasTexture(cv),
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+    transparent: true,
+    fog: false
+  }));
+  sprite.scale.set(size, size, 1);
+  return sprite;
+}
+
+/** 揭晓时向外扩散的冲击波环（复用 3 个环，轮流触发） */
+function makePrizeShockRings(group, accent) {
+  const rings = [];
+  for (let i = 0; i < 3; i++) {
+    const ring = new THREE.Mesh(
+      new THREE.RingGeometry(0.86, 1.04, 42),
+      new THREE.MeshBasicMaterial({
+        color: accent,
+        transparent: true,
+        opacity: 0,
+        side: THREE.DoubleSide,
+        depthWrite: false,
+        blending: THREE.AdditiveBlending,
+        fog: false
+      })
+    );
+    ring.rotation.x = -Math.PI / 2;
+    ring.visible = false;
+    ring.userData = { active: false, t: 0 };
+    group.add(ring);
+    rings.push(ring);
+  }
+  let cursor = 0;
+  return {
+    fire(y = 0.4) {
+      const ring = rings[cursor];
+      cursor = (cursor + 1) % rings.length;
+      ring.userData.active = true;
+      ring.userData.t = 0;
+      ring.position.y = y;
+      ring.visible = true;
+    },
+    update(dt) {
+      for (const ring of rings) {
+        const u = ring.userData;
+        if (!u.active) continue;
+        u.t += dt;
+        const k = u.t / 1.05;
+        if (k >= 1) {
+          u.active = false;
+          ring.visible = false;
+          continue;
+        }
+        const s = 0.5 + k * 8.5;
+        ring.scale.set(s, s, s);
+        ring.material.opacity = 0.55 * (1 - k) * (1 - k);
+      }
+    }
+  };
+}
+
+/** 烟花粒子池（一个 InstancedMesh，蓄力火星与揭晓烟花共用） */
+function makePrizeFireworks(group, count = 170) {
+  const mesh = new THREE.InstancedMesh(
+    new THREE.OctahedronGeometry(0.085, 0),
+    new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.92,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
+      fog: false
+    }),
+    count
+  );
+  mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  mesh.frustumCulled = false;
+  mesh.visible = false;
+  group.add(mesh);
+
+  const matrix = new THREE.Matrix4();
+  const quat = new THREE.Quaternion();
+  const axis = new THREE.Vector3(0.62, 1, 0.34).normalize();
+  const pos = new THREE.Vector3();
+  const scale = new THREE.Vector3();
+  const color = new THREE.Color();
+  const parts = Array.from({ length: count }, () => ({
+    active: false, t: 0, life: 1,
+    x: 0, y: 0, z: 0, vx: 0, vy: 0, vz: 0,
+    spin: 0, size: 1
+  }));
+  matrix.makeScale(0, 0, 0);
+  for (let i = 0; i < count; i++) {
+    mesh.setMatrixAt(i, matrix);
+    mesh.setColorAt(i, color.setHex(0xffffff));
+  }
+  mesh.instanceMatrix.needsUpdate = true;
+  mesh.instanceColor.needsUpdate = true;
+
+  let cursor = 0;
+  return {
+    burst(x, y, z, palette, amount = 40, power = 4.8) {
+      for (let k = 0; k < amount; k++) {
+        const index = cursor;
+        cursor = (cursor + 1) % count;
+        const part = parts[index];
+        part.active = true;
+        part.t = 0;
+        part.life = 1.4 + Math.random() * 0.9;
+        part.x = x;
+        part.y = y;
+        part.z = z;
+        // 球面均匀方向，略微上偏，像烟花散开
+        const u = Math.random() * 2 - 1;
+        const a = Math.random() * Math.PI * 2;
+        const r = Math.sqrt(Math.max(0, 1 - u * u));
+        const speed = power * (0.5 + Math.random() * 0.6);
+        part.vx = Math.cos(a) * r * speed;
+        part.vy = u * speed * 0.85 + 1.1;
+        part.vz = Math.sin(a) * r * speed;
+        part.spin = (Math.random() - 0.5) * 10;
+        part.size = 0.7 + Math.random() * 0.95;
+        mesh.setColorAt(index, color.setHex(palette[(Math.random() * palette.length) | 0]));
+      }
+      mesh.instanceColor.needsUpdate = true;
+      mesh.visible = true;
+    },
+    update(dt) {
+      if (!mesh.visible) return;
+      let alive = 0;
+      for (let i = 0; i < count; i++) {
+        const part = parts[i];
+        if (part.active) {
+          part.t += dt;
+          if (part.t >= part.life) {
+            part.active = false;
+          } else {
+            const drag = Math.min(1, 1.9 * dt);
+            part.vx -= part.vx * drag;
+            part.vz -= part.vz * drag;
+            part.vy -= 3.4 * dt + part.vy * drag * 0.5;
+            part.x += part.vx * dt;
+            part.y += part.vy * dt;
+            part.z += part.vz * dt;
+          }
+        }
+        if (part.active) {
+          alive++;
+          const k = part.t / part.life;
+          const fade = k < 0.12 ? k / 0.12 : 1 - (k - 0.12) / 0.88;
+          quat.setFromAxisAngle(axis, part.spin * part.t);
+          pos.set(part.x, part.y, part.z);
+          scale.setScalar(Math.max(0.001, part.size * fade));
+          matrix.compose(pos, quat, scale);
+        } else {
+          matrix.makeScale(0, 0, 0);
+        }
+        mesh.setMatrixAt(i, matrix);
+      }
+      mesh.instanceMatrix.needsUpdate = true;
+      if (!alive) mesh.visible = false;
+    }
+  };
+}
+
+/**
+ * 终极大奖：终点台上的惊喜礼盒。对外暴露 group / lidPivot（交给通用开箱动画）/ reveal()。
+ * 未揭晓时只占一个礼盒 + 光环；靠近才会“憋大招”，揭晓后升起金色大奖并放烟花。
+ */
+function makeGrandPrize(def, platform) {
+  const palette = PRIZE_PALETTES[def.id] || PRIZE_PALETTES.sky;
+  const accent = palette.accent;
+  const group = new THREE.Group();
+  group.userData.animated = true; // 必须：否则会被静态矩阵冻结
+  group.position.set(platform.x, platform.top, platform.z);
+  const fit = Math.min(1.35, Math.max(0.9, platform.half * 0.52));
+  group.scale.setScalar(fit);
+
+  /* —— 基座 —— */
+  const plinth = new THREE.Mesh(
+    new THREE.CylinderGeometry(1.0, 1.22, 0.34, 22),
+    new THREE.MeshStandardMaterial({ color: 0x39434f, roughness: 0.6, metalness: 0.42 })
+  );
+  plinth.position.y = 0.17;
+  plinth.castShadow = true;
+  plinth.receiveShadow = true;
+  group.add(plinth);
+  const plinthRing = new THREE.Mesh(
+    new THREE.TorusGeometry(1.04, 0.055, 6, 30),
+    new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.85, depthWrite: false })
+  );
+  plinthRing.rotation.x = Math.PI / 2;
+  plinthRing.position.y = 0.35;
+  group.add(plinthRing);
+
+  /* —— 礼盒（未开封的“惊喜”） —— */
+  const boxH = 1.0;
+  const boxMat = new THREE.MeshStandardMaterial({ color: 0x9c2f2f, roughness: 0.42, metalness: 0.16 });
+  const ribbonMat = new THREE.MeshStandardMaterial({
+    color: accent,
+    roughness: 0.26,
+    metalness: 0.6,
+    emissive: new THREE.Color(accent).multiplyScalar(0.35),
+    emissiveIntensity: 0.7
+  });
+  const box = new THREE.Mesh(new THREE.BoxGeometry(1.46, boxH, 1.46), boxMat);
+  box.position.y = 0.34 + boxH / 2;
+  box.castShadow = true;
+  box.receiveShadow = true;
+  group.add(box);
+  for (const ry of [0, Math.PI / 2]) {
+    const band = new THREE.Mesh(new THREE.BoxGeometry(1.52, boxH + 0.06, 0.18), ribbonMat);
+    band.position.copy(box.position);
+    band.rotation.y = ry;
+    band.castShadow = true;
+    group.add(band);
+  }
+
+  /* —— 盒盖：lidPivot 由通用开箱动画从 0 → -1.9 掀开 —— */
+  const lidPivot = new THREE.Group();
+  lidPivot.userData.animated = true;
+  lidPivot.position.set(0, 0.34 + boxH, -0.73);
+  const lid = new THREE.Mesh(new THREE.BoxGeometry(1.58, 0.16, 1.58), boxMat);
+  lid.position.set(0, 0.08, 0.73);
+  lid.castShadow = true;
+  lidPivot.add(lid);
+  const bow = new THREE.Mesh(new THREE.TorusGeometry(0.19, 0.055, 8, 18), ribbonMat);
+  bow.rotation.x = Math.PI / 2;
+  bow.position.set(0, 0.2, 0.73);
+  lidPivot.add(bow);
+  for (const s of [-1, 1]) {
+    const loop = new THREE.Mesh(new THREE.TorusGeometry(0.16, 0.048, 8, 16), ribbonMat);
+    loop.position.set(s * 0.21, 0.26, 0.73);
+    loop.rotation.set(Math.PI / 2, 0, s * 0.55);
+    lidPivot.add(loop);
+  }
+  group.add(lidPivot);
+
+  /* —— 盒中大奖：金色奖杯，开盒后升起 —— */
+  const goldMat = new THREE.MeshStandardMaterial({
+    color: palette.prize,
+    roughness: 0.16,
+    metalness: 0.92,
+    emissive: new THREE.Color(palette.prize).multiplyScalar(0.25),
+    emissiveIntensity: 0.85
+  });
+  const prize = new THREE.Group();
+  const prizeStartY = 0.34 + boxH * 0.4;
+  const prizeRestY = prizeStartY + 1.5;
+  prize.position.set(0, prizeStartY, 0);
+  prize.visible = false;
+  const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.3, 0.36, 0.11, 18), goldMat);
+  foot.position.y = 0.055;
+  const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.12, 0.28, 12), goldMat);
+  stem.position.y = 0.25;
+  const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.46, 0.22, 0.5, 22, 1, true), goldMat);
+  cup.position.y = 0.63;
+  const lip = new THREE.Mesh(new THREE.TorusGeometry(0.46, 0.035, 6, 26), goldMat);
+  lip.rotation.x = Math.PI / 2;
+  lip.position.y = 0.88;
+  const gem = new THREE.Mesh(new THREE.OctahedronGeometry(0.15, 0), goldMat);
+  gem.position.y = 1.06;
+  gem.scale.set(1, 1.4, 1);
+  prize.add(foot, stem, cup, lip, gem);
+  for (const s of [-1, 1]) {
+    const handle = new THREE.Mesh(new THREE.TorusGeometry(0.17, 0.045, 8, 16, Math.PI * 1.05), goldMat);
+    handle.position.set(s * 0.47, 0.66, 0);
+    handle.rotation.y = s * 1.35;
+    prize.add(handle);
+  }
+  prize.traverse((o) => { if (o.isMesh) o.castShadow = true; });
+  group.add(prize);
+
+  /* —— 光环 / 光柱 / 光晕 / 冲击波 / 烟花 —— */
+  const halo = new THREE.Mesh(
+    new THREE.TorusGeometry(0.98, 0.035, 8, 44),
+    new THREE.MeshBasicMaterial({ color: accent, transparent: true, opacity: 0.75, depthWrite: false })
+  );
+  halo.rotation.x = Math.PI / 2;
+  halo.position.y = 1.95;
+  group.add(halo);
+
+  const beamMat = new THREE.MeshBasicMaterial({
+    color: accent,
+    transparent: true,
+    opacity: 0,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+    blending: THREE.AdditiveBlending,
+    fog: false
+  });
+  const beam = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.9, 34, 18, 1, true), beamMat);
+  beam.position.y = 17;
+  beam.visible = false;
+  group.add(beam);
+  const glow = makePrizeGlowSprite(accent, 5);
+  glow.position.y = 1.1;
+  glow.visible = false;
+  group.add(glow);
+
+  const shock = makePrizeShockRings(group, accent);
+  const fireworks = makePrizeFireworks(group);
+
+  let opened = false;
+  let openT = -1;
+  let shake = 0;
+  let volley = 0;
+  let volleyTimer = 0;
+  let sparkTimer = 0;
+
+  function reveal(silent) {
+    if (opened) return;
+    opened = true;
+    openT = silent ? 999 : 0;
+    prize.visible = true;
+    beam.visible = true;
+    glow.visible = true;
+    if (silent) {
+      // 读档直接定格在“已揭晓”：大奖升到位、光柱常亮，不放烟花
+      prize.position.y = prizeRestY;
+      prize.scale.setScalar(1);
+      beamMat.opacity = 0.22;
+    } else {
+      volley = 3;
+      volleyTimer = 0;
+      shock.fire(0.35);
+    }
+  }
+
+  return {
+    group,
+    lidPivot,
+    platform,
+    isGrandPrize: true,
+    get opened() { return opened; },
+    reveal,
+    update(dt, time = 0, player = null) {
+      const near = player
+        ? Math.hypot(player.pos.x - platform.x, player.pos.z - platform.z)
+        : 999;
+      const charging = !opened && near < 11;
+      shake += ((charging ? 1 : 0.18) - shake) * Math.min(1, 3.4 * dt);
+
+      // 光环：待机慢转，蓄力加速，揭晓后放大高转
+      const breathe = Math.sin(time * (charging ? 10 : 2.1));
+      halo.rotation.z += dt * (opened ? 2.6 : charging ? 1.9 : 0.5);
+      halo.scale.setScalar((opened ? 1.3 : 1) + breathe * (charging ? 0.11 : 0.04));
+      halo.position.y = 1.95 + (opened ? 0.15 : 0) + breathe * 0.05;
+
+      // 蓄力颤抖：整组轻抖 + 缎带发光脉动
+      group.position.x = platform.x + (charging ? Math.sin(time * 47) * 0.035 : 0);
+      group.position.z = platform.z + (charging ? Math.cos(time * 41) * 0.035 : 0);
+      group.position.y = platform.top + (charging ? Math.abs(Math.sin(time * 7.5)) * 0.04 : 0);
+      ribbonMat.emissiveIntensity = charging ? 0.95 + breathe * 0.45 : 0.7;
+
+      if (!opened) {
+        // 蓄力时从盒顶向上冒金色火星，诱惑玩家靠近
+        if (charging) {
+          sparkTimer -= dt;
+          if (sparkTimer <= 0) {
+            sparkTimer = 0.22;
+            fireworks.burst(
+              (Math.random() - 0.5) * 1.1,
+              1.5,
+              (Math.random() - 0.5) * 1.1,
+              palette.burst,
+              5,
+              1.5
+            );
+          }
+        }
+      } else {
+        openT += dt;
+        const k = Math.min(1, openT / 1.2);
+        const ease = 1 - Math.pow(1 - k, 3);
+        prize.position.y = prizeStartY + (prizeRestY - prizeStartY) * ease;
+        prize.scale.setScalar(0.4 + ease * 0.6);
+        prize.rotation.y += dt * 1.5;
+        beamMat.opacity = 0.1 + 0.12 * Math.abs(Math.sin(time * 2.3)) + (1 - k) * 0.4;
+        glow.material.opacity = 0.45 + 0.2 * Math.sin(time * 3.2);
+        const glowSize = 4.6 + Math.sin(time * 3.2) * 0.5 + (1 - k) * 3.5;
+        glow.scale.set(glowSize, glowSize, 1);
+
+        // 三波烟花 + 冲击波，越放越远越高
+        if (volley > 0) {
+          volleyTimer -= dt;
+          if (volleyTimer <= 0) {
+            volleyTimer = 0.5;
+            const a = volley * 2.2 + time * 0.4;
+            const radius = 3.4 + volley * 1.4;
+            // 粒子在 group 的局部坐标系里（group 已缩放/平移），这里给相对大奖中心的偏移
+            fireworks.burst(
+              Math.cos(a) * radius,
+              3.2 + volley * 1.2,
+              Math.sin(a) * radius,
+              palette.burst,
+              44,
+              5.2
+            );
+            shock.fire(0.5 + volley * 0.3);
+            volley--;
+          }
+        }
+      }
+
+      fireworks.update(dt);
+      shock.update(dt);
+    }
+  };
+}
+
 function makeLongCourseVisual(def) {
   const group = new THREE.Group();
   const staticEntries = [];
   const dynamicEntries = [];
   const rewards = [];
+  const chestRewards = []; // 阶段宝箱（实例化绘制）；终点改为终极大奖，不再放宝箱
 
   def.platforms.forEach((p, index) => {
     if (p.motion) dynamicEntries.push({ p });
@@ -3215,6 +3657,7 @@ function makeLongCourseVisual(def) {
     if (p.reward) {
       const reward = makeSkyChest(def, p, index);
       rewards.push(reward);
+      if (!reward.final) chestRewards.push(reward);
     }
   });
 
@@ -3223,13 +3666,16 @@ function makeLongCourseVisual(def) {
   if (def.style === 'ocean') addOceanProps(group, def.platforms);
   if (def.style === 'comet') addCometProps(group, def.platforms);
   addSkyRotorInstances(group, def.rotors || [], def.style);
-  const updateChestVisuals = addSkyChestInstances(group, rewards);
+  const updateChestVisuals = addSkyChestInstances(group, chestRewards);
   updateChestVisuals();
 
   const rewardConfetti = makeLongConfetti(group);
 
   const finalReward = rewards.find((r) => r.final) || rewards[rewards.length - 1];
   const goalPlatform = finalReward.platform;
+  // 终极大奖：替换掉原先放在终点台上的宝箱
+  const grandPrize = makeGrandPrize(def, goalPlatform);
+  group.add(grandPrize.group);
   const flagPivot = new THREE.Group();
   flagPivot.position.set(goalPlatform.x, goalPlatform.top, goalPlatform.z);
   const flagPole = box(0.08, 4.4, 0.08, PALETTE.woodDark);
@@ -3262,7 +3708,8 @@ function makeLongCourseVisual(def) {
     longCourse: true,
     platforms: def.platforms,
     rewards,
-    lidPivot: finalReward.lidPivot,
+    lidPivot: grandPrize.lidPivot,
+    grandPrize,
     flag,
     goal,
     setRewardOpened(id, animate = true) {
@@ -3270,11 +3717,17 @@ function makeLongCourseVisual(def) {
       if (!reward || reward.opened) return false;
       reward.opened = true;
       reward.openT = 0;
+      if (reward.final) {
+        // 终点：揭晓终极大奖（读档恢复时直接定格在已揭晓状态，不放烟花）
+        grandPrize.reveal(!animate);
+        if (!animate) grandPrize.lidPivot.rotation.x = -1.9;
+        return true;
+      }
       if (!animate) {
         reward.lidPivot.rotation.x = -1.9;
         reward.beam.visible = false;
       }
-      if (animate) rewardConfetti.spawn(reward, reward.final ? 42 : 20);
+      if (animate) rewardConfetti.spawn(reward, 20);
       return true;
     },
     setCourseStage(stage) {
@@ -3285,21 +3738,23 @@ function makeLongCourseVisual(def) {
       updateDynamicVisuals(0, true);
     },
     spawnConfetti() {
+      grandPrize.reveal(false);
       rewardConfetti.spawn(finalReward, 42);
     },
-    update(dt, time = 0) {
+    update(dt, time = 0, player = null) {
       updateDynamicVisuals(time);
 
-      for (const reward of rewards) {
+      for (const reward of chestRewards) {
         const target = reward.opened ? -1.9 : 0;
         reward.lidPivot.rotation.x += (target - reward.lidPivot.rotation.x) * Math.min(1, 7 * dt);
         const pulse = 0.75 + Math.sin(time * 2.1 + reward.stage) * 0.18;
-        reward.beam.material.opacity = reward.opened ? 0.04 : (reward.final ? 0.2 : 0.14) * pulse;
+        reward.beam.material.opacity = reward.opened ? 0.04 : 0.14 * pulse;
         reward.beam.scale.set(1, pulse, 1);
         if (reward.openT >= 0) reward.openT += dt;
       }
       updateChestVisuals();
 
+      grandPrize.update(dt, time, player);
       rewardConfetti.update(dt);
     }
   };
@@ -3308,7 +3763,8 @@ function makeLongCourseVisual(def) {
 /* ================= 关卡视觉构建（注册表驱动） =================
  * makeCourseVisual(def) 依据 COURSES 中的关卡定义生成全部视觉物：
  *   平台：'sea' 桩柱浮台 | 'float' 悬空台三样式轮换 | 500 台长关使用实例化视觉
- *   终点：宝箱（盖可开）+ 旗子 + 彩带池；float 样式附灯柱，sea 样式终点岛附棕榈树
+ *   终点：终极大奖（惊喜礼盒 → 金色大奖 + 光柱 + 烟花）+ 旗子 + 彩带池；
+ *        float 样式附灯柱，sea 样式终点岛附棕榈树
  * 新增关卡无需修改此函数——只往 COURSES 加定义即可。 */
 
 function makeCourseVisual(def) {
@@ -3422,30 +3878,13 @@ function makeCourseVisual(def) {
     g.add(pg);
   }
 
-  // 终点：宝箱（盖可开）+ 旗子 + 彩带池
+  // 终点：终极大奖（惊喜礼盒 → 金色大奖）+ 旗子 + 彩带池
   const goal = def.goal;
-  const chest = new THREE.Group();
-  const chestBody = box(0.9, 0.5, 0.62, PALETTE.woodDark);
-  chestBody.position.y = 0.25;
-  chest.add(chestBody);
-  const lidPivot = new THREE.Group();
-  lidPivot.userData.animated = true;
-  lidPivot.position.set(0, 0.5, -0.31);
-  const lid = box(0.9, 0.16, 0.62, PALETTE.wood);
-  lid.position.set(0, 0.08, 0.31);
-  lidPivot.add(lid);
-  chest.add(lidPivot);
-  const lock = new THREE.Mesh(
-    new THREE.SphereGeometry(0.05, 8, 6),
-    new THREE.MeshStandardMaterial({ color: 0xd8b04a, roughness: 0.3, metalness: 0.7 })
-  );
-  lock.position.set(0, 0.52, 0.33);
-  chest.add(lock);
-  chest.position.set(goal.x, goal.top, goal.z);
-  chest.rotation.y = 0.55;
-  g.add(chest);
+  const grandPrize = makeGrandPrize(def, goal);
+  g.add(grandPrize.group);
+  const lidPivot = grandPrize.lidPivot;
 
-  const fo = goal.half * 0.45;
+  const fo = goal.half * 0.62;
   const flagPole = box(0.06, 1.7, 0.06, PALETTE.woodDark);
   flagPole.position.set(goal.x + fo, goal.top + 0.85, goal.z + fo);
   g.add(flagPole);
@@ -3478,7 +3917,7 @@ function makeCourseVisual(def) {
   // 样式附饰：sea 终点岛种棕榈树；float 终点台加灯柱
   if (def.style === 'sea') {
     const goalPlat = def.platforms[def.platforms.length - 1];
-    const goalPalm = makePalm(goalPlat.x + goalPlat.half * 0.45, goalPlat.z + goalPlat.half * 0.35, 0.75, 1.1);
+    const goalPalm = makePalm(goalPlat.x + goalPlat.half * 0.72, goalPlat.z + goalPlat.half * 0.58, 0.75, 1.1);
     goalPalm.position.y = goalPlat.top;
     g.add(goalPalm);
   } else {
@@ -3490,9 +3929,11 @@ function makeCourseVisual(def) {
     group: g,
     platforms: def.platforms,
     lidPivot,
+    grandPrize,
     flag,
     goal: { x: goal.x, y: goal.top, z: goal.z, half: goal.half, opened: false },
     spawnConfetti() {
+      grandPrize.reveal(false);
       for (const m of confetti) {
         m.visible = true;
         m.position.set(goal.x, goal.top + 0.6, goal.z);
@@ -3502,7 +3943,7 @@ function makeCourseVisual(def) {
         m.material.opacity = 1;
       }
     },
-    update(dt) {
+    update(dt, time = 0, player = null) {
       for (const m of confetti) {
         if (!m.visible) continue;
         const u = m.userData;
@@ -3514,6 +3955,7 @@ function makeCourseVisual(def) {
         if (u.t > 1.1) m.material.opacity = Math.max(0, 1 - (u.t - 1.1) / 0.9);
         if (u.t > 2.1) m.visible = false;
       }
+      grandPrize.update(dt, time, player);
     }
   };
 }
@@ -3945,7 +4387,7 @@ export function buildBeachScene(options = {}) {
         const lidTarget = v.goal.opened ? -1.9 : 0;
         v.lidPivot.rotation.x += (lidTarget - v.lidPivot.rotation.x) * Math.min(1, 7 * visualDt);
         v.flag.rotation.y = Math.sin(t * 2.2 + (id === 'sea' ? 0 : 1)) * 0.28;
-        v.update(visualDt, t);
+        v.update(visualDt, t, player);
       }
 
       // 炊烟缓升

@@ -749,7 +749,7 @@ function collectReward(reward) {
       : opened.courseId === 'comet'
         ? '抵达光年彼岸！'
         : '登顶成功！';
-    const message = finishText + ' + ' + opened.points.toLocaleString('zh-CN') + ' 积分';
+    const message = finishText + ' 终极大奖已开启 · +' + opened.points.toLocaleString('zh-CN') + ' 积分';
     showHint(message, 5600);
     return;
   }
@@ -948,7 +948,7 @@ function frame(now) {
         if (TRAINING_COURSE_IDS.includes(courseId)) {
           finishTrainingCourse(courseId);
         } else {
-          showHint('「' + course.name + '」关卡完成！宝箱已开启', 4200);
+          showHint('「' + course.name + '」终极大奖已开启！', 4200);
         }
       }
     }
