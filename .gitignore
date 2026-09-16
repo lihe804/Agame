@@ -1,0 +1,27 @@
+# 角色参考图 / Character reference images
+人物/
+
+# 工作区工具数据 / Workspace AI tool data
+.workbuddy/
+.workBuddy/
+
+# 临时文件（Chrome CDP 调试产物、测试截图等）
+.tmp/
+
+# 构建产物 / Build & release artifacts
+release/
+
+# 功能截图（非必需跟踪）
+screenshots/
+
+# 操作系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE 编辑器配置
+.vscode/
+.idea/
+*.swp
+*.swo
+*~

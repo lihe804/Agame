@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>海边小镇 · 角色漫游</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='8' cy='8' r='7' fill='%23f0b848'/></svg>" />
+<link rel="stylesheet" href="style.css" />
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three.module.js",
+    "three/addons/": "./vendor/jsm/"
+  }
+}
+</script>
+</head>
+<body>
+<canvas id="c"></canvas>
+
+<div id="select-ui" class="ui">
+  <div class="select-head">
+    <h1>海边小镇</h1>
+    <p>选择一位角色，进入 3D 场景参观</p>
+  </div>
+  <div class="cards">
+    <button class="card" data-char="0">
+      <span class="card-dot" style="background:#e2504a"></span>
+      <span class="card-name">刘世锦</span>
+    </button>
+    <button class="card" data-char="1">
+      <span class="card-dot" style="background:#4aa3e2"></span>
+      <span class="card-name">王梓航</span>
+    </button>
+  </div>
+  <p class="select-foot">两位角色按真实身高比例同屏展示，点击卡片选择</p>
+</div>
+
+<div id="hud" class="ui hidden">
+  <div class="hud-top">
+    <span id="hud-name">—</span>
+    <span id="hud-sub"></span>
+  </div>
+  <div id="score-panel" aria-live="polite">
+    <span class="score-label">探索积分</span>
+    <strong id="score-value">0</strong>
+    <span id="score-stage">登天阶段 0 / 20</span>
+    <span id="save-status">存档：起点</span>
+    <span id="dash-status" class="hidden">星跃充能 3 / 3</span>
+    <button id="reset-progress" type="button" title="清空积分、宝箱与三个长关的检查点">一键刷新积分</button>
+  </div>
+  <div class="hud-keys">
+    <span><b>W A S D</b> 移动</span>
+    <span><b>空格</b> 跳跃</span>
+    <span><b>Shift</b> 加速</span>
+    <span><b>F</b> 星跃</span>
+    <span><b>E</b> 开门</span>
+    <span><b>R</b> 返回存档点</span>
+    <span><b>T</b> 切换关卡</span>
+    <span><b>M</b> 静音</span>
+    <span><b>鼠标</b> 点击锁定后移动转视角</span>
+    <span><b>手柄</b> 左摇杆移动 · A 跳 · LT 加速 · 右摇杆视角</span>
+    <span><b>滚轮</b> 缩放</span>
+  </div>
+  <div id="timer" class="hidden">0.00</div>
+  <div id="hint" class="hidden"></div>
+  <div id="lock-tip" class="hidden">点击画面锁定鼠标视角 · ESC 释放</div>
+  <div class="hud-actions">
+    <button id="course-switch" type="button" title="切换长关（T）">切换关卡</button>
+    <button id="back-btn" type="button">返回选角</button>
+  </div>
+</div>
+
+<div id="loading" class="ui"><div class="spinner"></div><span id="loading-text">正在加载角色模型…</span></div>
+
+<script type="module" src="./src/main.js"></script>
+</body>
+</html>
