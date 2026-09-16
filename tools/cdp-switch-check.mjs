@@ -162,25 +162,40 @@ const startGeometry = await evaluate(`(async () => {
   const originalCourse = state.activeCourse;
   const results = ['sky', 'ocean'].map((id) => {
     state.beach.setViewMode(id);
-    const platform = state.beach.courseVisual(id).platforms[0];
-    const terrain = scene.terrainHeight(platform.x, platform.z);
-    const support = { platform: null };
-    const ground = scene.groundAt(platform.x, platform.z, platform.top + 0.06, support);
+    const platforms = state.beach.courseVisual(id).platforms;
+    const inspect = (platform) => {
+      const terrain = scene.terrainHeight(platform.x, platform.z);
+      const support = { platform: null };
+      const ground = scene.groundAt(platform.x, platform.z, platform.top + 0.06, support);
+      return {
+        number: platform.number,
+        locked: platform.locked,
+        motion: platform.motion?.type ?? null,
+        clearance: platform.top - terrain,
+        support: support.platform?.number ?? null,
+        grounded: Math.abs(ground - platform.top) < 0.001
+      };
+    };
     return {
       id,
-      locked: platform.locked,
-      clearance: platform.top - terrain,
-      support: support.platform?.number ?? null,
-      grounded: Math.abs(ground - platform.top) < 0.001
+      start: inspect(platforms[0]),
+      approach: id === 'ocean' ? inspect(platforms[1]) : null
     };
   });
   state.beach.setViewMode(originalCourse);
   return results;
 })()`);
-for (const start of startGeometry) {
-  assert(!start.locked, start.id + ' 首台被错误锁定');
-  assert(start.clearance > 0.15, start.id + ' 首台仍埋在地形中');
-  assert(start.support === 1 && start.grounded, start.id + ' 首台没有成为可站立碰撞面');
+for (const course of startGeometry) {
+  const start = course.start;
+  assert(!start.locked, course.id + ' 首台被错误锁定');
+  assert(start.clearance > 0.15, course.id + ' 首台仍埋在地形中');
+  assert(start.support === 1 && start.grounded, course.id + ' 首台没有成为可站立碰撞面');
+  if (course.approach) {
+    const approach = course.approach;
+    assert(approach.number === 2 && approach.motion === null, '潮汐第二台仍会移动');
+    assert(approach.clearance > 0.15, '潮汐第二台仍埋在地形中');
+    assert(approach.support === 2 && approach.grounded, '潮汐第二台没有成为可站立碰撞面');
+  }
 }
 
 await evaluate("document.getElementById('course-switch').click()");

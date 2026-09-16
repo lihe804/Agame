@@ -377,6 +377,7 @@ const SKY_LAST_PLATFORM = SKY_COURSE_DATA.platforms[SKY_COURSE_DATA.platforms.le
 
 const OCEAN_PLATFORM_TOTAL = 500;
 const OCEAN_REWARD_INTERVAL = 25;
+const OCEAN_FIXED_START_PLATFORMS = 2;
 const OCEAN_MIN_X = 28;
 const OCEAN_MAX_X = 70;
 const OCEAN_MIN_Z = -3000;
@@ -789,6 +790,10 @@ function makeOceanCurrentCourse() {
       );
     }
 
+    if (platforms.length < OCEAN_FIXED_START_PLATFORMS) {
+      chosen.top = Math.max(chosen.top, terrainHeight(chosen.x, chosen.z) + 0.22);
+    }
+
     pose.x = chosen.x;
     pose.z = chosen.z;
     pose.top = chosen.top;
@@ -985,7 +990,9 @@ function makeOceanCurrentCourse() {
   const appendRegular = (stage, count, offset = 0) => {
     for (let i = 0; i < count; i++) {
       const step = offset + i;
-      const motionType = regularPattern(stage, step);
+      const motionType = platforms.length < OCEAN_FIXED_START_PLATFORMS
+        ? 'static'
+        : regularPattern(stage, step);
       placeBase(stage, step, {
         motionType: motionType === 'static' ? null : motionType,
         half: planAt(stage).half[step % planAt(stage).half.length]
