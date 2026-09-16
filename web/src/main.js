@@ -166,7 +166,8 @@ const state = {
     running: false,
     start: 0,
     course: null,
-    elapsed: 0
+    elapsed: 0,
+    platform: null
   },
   run: {
     currentCourse: null,
@@ -270,6 +271,7 @@ function stopTrainingTimer() {
   state.timer.running = false;
   state.timer.course = null;
   state.timer.elapsed = elapsed;
+  state.timer.platform = null;
   timerEl.classList.add('hidden');
   return wasRunning ? elapsed : null;
 }
@@ -280,12 +282,46 @@ function startTrainingTimer(courseId) {
   state.timer.course = courseId;
   state.timer.start = performance.now();
   state.timer.elapsed = 0;
+  state.timer.platform = state.player?.supportPlatform?.courseId === courseId
+    ? state.player.supportPlatform
+    : null;
   timerEl.textContent = '0.00 秒';
   timerEl.classList.remove('hidden');
 }
 
 function updateTrainingTimer() {
   if (!state.timer.running) return;
+  const support = state.player?.supportPlatform;
+  if (support?.courseId === state.timer.course) {
+    state.timer.platform = support;
+  } else {
+    const lastPlatform = state.timer.platform;
+    const fallClearance = state.timer.course === 'sea' ? 0.28 : 0.72;
+    const fellBelowPlatform =
+      lastPlatform &&
+      state.player.vy < 0.2 &&
+      state.player.pos.y < lastPlatform.top - fallClearance;
+    const enteredWater = state.timer.course === 'sea' && state.player.pos.y <= WATER_LEVEL + 0.04;
+    const landedOffCourse = state.player.onGround && support?.courseId !== state.timer.course;
+    if (fellBelowPlatform || enteredWater || landedOffCourse) {
+      const courseId = state.timer.course;
+      const elapsed = stopTrainingTimer();
+      const course = COURSE_BY_ID.get(courseId);
+      if (elapsed != null) {
+        const landedOnTerrain =
+          courseId === 'height' &&
+          state.player.onGround &&
+          Math.abs(state.player.pos.y - terrainHeight(state.player.pos.x, state.player.pos.z)) < 0.15;
+        showHint(
+          landedOnTerrain
+            ? '落回地面，本次环屋计时已取消'
+            : '已离开「' + (course?.name || '训练关卡') + '」台阶 · 用时 ' + elapsed.toFixed(2) + ' 秒',
+          2600
+        );
+      }
+      return;
+    }
+  }
   state.timer.elapsed = Math.max(0, (performance.now() - state.timer.start) / 1000);
   timerEl.textContent = state.timer.elapsed.toFixed(2) + ' 秒';
 }
@@ -637,7 +673,12 @@ function respawnAtCheckpoint(courseId = state.activeCourse, hintMessage = null) 
   if (courseId === 'comet') {
     state.score.courses.comet.dashCharges = DASH_MAX;
   }
-  state.player.respawn({ x: checkpoint.x, y: checkpoint.top + 0.04, z: checkpoint.z });
+  const terrainTop = terrainHeight(checkpoint.x, checkpoint.z);
+  state.player.respawn({
+    x: checkpoint.x,
+    y: Math.max(checkpoint.top, terrainTop) + 0.06,
+    z: checkpoint.z
+  });
   state.player.group.position.copy(state.player.pos);
   state.rig.initialized = false;
   hudSubEl.textContent = course.name + ' · 500 阶';
@@ -660,6 +701,7 @@ function respawnAtSeaStart() {
   state.player.respawn({ x: start.x, y: start.top, z: start.z });
   state.player.group.position.copy(state.player.pos);
   state.rig.initialized = false;
+  state.run.onStart.sea = true;
   state.beach.spawnRipple(start.x, start.z);
   splashSfx();
 }

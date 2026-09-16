@@ -64,7 +64,14 @@ function makeSkyCourse() {
     aurora: { deck: 0x668c86, trim: 0x9ce1c4 }
   };
 
-  const pose = { x: 37.0, z: 34.0, top: 1.45, heading: -2.35 };
+  const startX = 37.0;
+  const startZ = 34.0;
+  const pose = {
+    x: startX,
+    z: startZ,
+    top: terrainHeight(startX, startZ) + 0.22,
+    heading: -2.35
+  };
   let firstPlatform = true;
 
   const clampPoseToMap = () => {
@@ -492,7 +499,14 @@ function makeOceanCurrentCourse() {
   const rnd = makeSeededRandom(0x0cea7e);
   const platforms = [];
   const rotors = [];
-  const pose = { x: 47, z: 4, top: 1.18, heading: -0.14 };
+  const startX = 47;
+  const startZ = 4;
+  const pose = {
+    x: startX,
+    z: startZ,
+    top: terrainHeight(startX, startZ) + 0.22,
+    heading: -0.14
+  };
   let firstPlatform = true;
   let laneDirection = 1;
   let laneRun = 8;

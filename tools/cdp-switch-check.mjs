@@ -4,7 +4,8 @@
  *   2. 验证自由模式隐藏三个长关，但 sea / height 训练计时可用
  *   3. 验证自由模式不写入长关积分、宝箱、检查点或 lastCourse
  *   4. 验证三个长关存档互不覆盖，星跃切换后恢复 3 / 3 充能
- *   5. 验证移动端两个 HUD 操作按钮不重叠且不越界
+ *   5. 验证长关首台高于地形且能提供碰撞支撑
+ *   6. 验证移动端两个 HUD 操作按钮不重叠且不越界
  *
  * 用法: node tools/cdp-switch-check.mjs [url]
  */
@@ -155,6 +156,33 @@ const initial = await evaluate(`(() => {
 assert(initial.activeCourse === 'sky', '初始关卡不是登天云梯');
 assert(initial.button === '切换：潮汐远征', '初始切换按钮文案错误');
 
+const startGeometry = await evaluate(`(async () => {
+  const scene = await import('./src/scene.js');
+  const state = window.__wb.state;
+  const originalCourse = state.activeCourse;
+  const results = ['sky', 'ocean'].map((id) => {
+    state.beach.setViewMode(id);
+    const platform = state.beach.courseVisual(id).platforms[0];
+    const terrain = scene.terrainHeight(platform.x, platform.z);
+    const support = { platform: null };
+    const ground = scene.groundAt(platform.x, platform.z, platform.top + 0.06, support);
+    return {
+      id,
+      locked: platform.locked,
+      clearance: platform.top - terrain,
+      support: support.platform?.number ?? null,
+      grounded: Math.abs(ground - platform.top) < 0.001
+    };
+  });
+  state.beach.setViewMode(originalCourse);
+  return results;
+})()`);
+for (const start of startGeometry) {
+  assert(!start.locked, start.id + ' 首台被错误锁定');
+  assert(start.clearance > 0.15, start.id + ' 首台仍埋在地形中');
+  assert(start.support === 1 && start.grounded, start.id + ' 首台没有成为可站立碰撞面');
+}
+
 await evaluate("document.getElementById('course-switch').click()");
 await sleep(180);
 const afterButton = await evaluate(`(() => {
@@ -288,6 +316,28 @@ assert(
 
 await evaluate(`(() => {
   const state = window.__wb.state;
+  const start = state.beach.courseVisual('sea').platforms[0];
+  state.player.pos.set(start.x + start.half + 0.55, start.top - 0.08, start.z);
+  state.player.vel.set(0, 0, 0);
+  state.player.vy = -3;
+  state.player.onGround = false;
+})()`);
+await sleep(700);
+const freeSeaFell = await evaluate(`(() => {
+  const state = window.__wb.state;
+  return {
+    running: state.timer.running,
+    hidden: document.getElementById('timer').classList.contains('hidden'),
+    elapsed: state.timer.elapsed
+  };
+})()`);
+assert(
+  !freeSeaFell.running && freeSeaFell.hidden && freeSeaFell.elapsed > 0,
+  '自由训练脱离台阶后没有停止计时: ' + JSON.stringify(freeSeaFell)
+);
+
+await evaluate(`(() => {
+  const state = window.__wb.state;
   const start = state.beach.courseVisual('height').platforms[0];
   state.run.onStart.height = false;
   state.player.pos.set(start.x, start.top, start.z);
@@ -301,14 +351,18 @@ const freeHeightTimer = await evaluate(`(() => {
   return {
     running: state.timer.running,
     course: state.timer.course,
-    activeCourse: state.activeCourse
+    activeCourse: state.activeCourse,
+    runCourse: state.run.currentCourse,
+    playerY: state.player.pos.y,
+    onGround: state.player.onGround,
+    supportCourse: state.player.supportPlatform?.courseId || null
   };
 })()`);
 assert(
   freeHeightTimer.running &&
   freeHeightTimer.course === 'height' &&
   freeHeightTimer.activeCourse === 'free',
-  '自由模式的环屋训练没有独立计时'
+  '自由模式的环屋训练没有独立计时: ' + JSON.stringify(freeHeightTimer)
 );
 
 await evaluate(`(() => {
