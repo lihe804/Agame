@@ -224,11 +224,9 @@ const launch = await evaluate(`(() => {
   const dz = target.z - source.z;
   state.activeCourse = 'comet';
   state.score.courses.comet.dashCharges = 3;
-  state.timer.running = true;
-  state.timer.course = 'comet';
-  state.timer.start = performance.now();
-  state.timer.checkpoint = source;
-  state.timer.checkpoints.comet = source;
+  state.run.currentCourse = 'comet';
+  state.run.checkpoint = source;
+  state.run.checkpoints.comet = source;
   state.player.respawn({ x: source.x, y: source.top + 0.02, z: source.z });
   state.player.group.position.copy(state.player.pos);
   state.rig.yaw = Math.atan2(-dx, -dz);
@@ -283,8 +281,8 @@ const rewardResult = await evaluate(`(() => {
   const skyCheckpoint = state.beach.courseVisual('sky').platforms[24];
   const oceanCheckpoint = state.beach.courseVisual('ocean').platforms[49];
   state.score.courses.comet.dashCharges = 0;
-  state.timer.checkpoints.sky = skyCheckpoint;
-  state.timer.checkpoints.ocean = oceanCheckpoint;
+  state.run.checkpoints.sky = skyCheckpoint;
+  state.run.checkpoints.ocean = oceanCheckpoint;
   state.player.respawn({ x: reward.platform.x, y: reward.platform.top + 0.02, z: reward.platform.z });
   state.player.group.position.copy(state.player.pos);
   return {
@@ -316,10 +314,10 @@ if (rewardState.skyCheckpoint !== rewardResult.skyCheckpoint || rewardState.ocea
 
 const fallCheckpoint = await evaluate(`(() => {
   const state = window.__wb.state;
-  const checkpoint = state.timer.checkpoints.comet;
-  state.timer.running = true;
-  state.timer.course = 'comet';
-  state.timer.start = performance.now();
+  const checkpoint = state.run.checkpoints.comet;
+  state.activeCourse = 'comet';
+  state.run.currentCourse = 'comet';
+  state.run.checkpoint = checkpoint;
   state.player.pos.set(0, -1, -30);
   state.player.vel.set(0, 0, 0);
   state.player.vy = 0;
@@ -329,11 +327,11 @@ const fallCheckpoint = await evaluate(`(() => {
 await sleep(250);
 const fallResult = await evaluate(`(() => {
   const state = window.__wb.state;
-  const checkpoint = state.timer.checkpoints.comet;
+  const checkpoint = state.run.checkpoints.comet;
   return {
     distance: Math.hypot(state.player.pos.x - checkpoint.x, state.player.pos.z - checkpoint.z),
     charges: state.score.courses.comet.dashCharges,
-    course: state.timer.course
+    course: state.run.currentCourse
   };
 })()`);
 console.log('comet fall rescue:', JSON.stringify(fallResult));

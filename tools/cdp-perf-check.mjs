@@ -89,9 +89,9 @@ async function sampleCourse(id, platformNumber) {
     state.beach.setCourseStage('${id}', platform.stage);
     state.beach.setViewMode('${id}');
     state.activeCourse = '${id}';
-    state.timer.running = false;
-    state.timer.course = null;
-    state.timer.checkpoints['${id}'] = platform;
+    state.run.currentCourse = '${id}';
+    state.run.checkpoint = platform;
+    state.run.checkpoints['${id}'] = platform;
     state.player.respawn({ x: platform.x, y: platform.top + 0.04, z: platform.z });
     state.player.group.position.copy(state.player.pos);
     state.rig.initialized = false;

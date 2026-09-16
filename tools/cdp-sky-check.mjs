@@ -1,9 +1,10 @@
 /**
- * 登天云梯专项 CDP 检查：
- *   1. 校验 500 平台、20 个宝箱、动态平台与最高高度
- *   2. 检查旋转/浮动平台确实在移动
- *   3. 直接触发第一座阶段宝箱，核对积分、HUD 和检查点
- *   4. 输出起点、旋转区、宝箱区和终点的截图
+ * 长关专项 CDP 检查：
+ *   1. 校验 500 平台、20 个宝箱、20 种潮汐机制、动态平台与最高高度
+ *   2. 校验玩法计时、计时 HUD 与旧榜单存档已完全移除
+ *   3. 检查旋转/浮动平台确实在移动
+ *   4. 直接触发第一座阶段宝箱，核对积分、HUD 和检查点
+ *   5. 输出起点、旋转区、宝箱区和终点的截图
  *
  * 用法: node tools/cdp-sky-check.mjs [url] [outPrefix]
  */
@@ -136,6 +137,20 @@ await sleep(350);
 await evaluate("document.querySelector('.card[data-char=\"0\"]').click()");
 await sleep(2200);
 
+const removedGameplayTimers = await evaluate(`(() => ({
+  timerElement: !!document.getElementById('timer'),
+  timerState: Object.prototype.hasOwnProperty.call(window.__wb.state, 'timer'),
+  boardKeys: Object.keys(localStorage).filter((key) => key.startsWith('wb-board-'))
+}))()`);
+console.log('removed gameplay timers:', JSON.stringify(removedGameplayTimers));
+if (
+  removedGameplayTimers.timerElement ||
+  removedGameplayTimers.timerState ||
+  removedGameplayTimers.boardKeys.length > 0
+) {
+  throw new Error('页面仍残留玩法计时或旧榜单存档');
+}
+
 const skyStats = await evaluate(`(() => {
   const state = window.__wb.state;
   const visual = state.beach.courseVisual('sky');
@@ -231,17 +246,14 @@ const oceanStats = await evaluate(`(() => {
     const nearHouse = platform.x > 11 && platform.x < 19 && platform.z > 3 && platform.z < 11;
     return nearOldSea || nearHouse;
   });
-  let minDistance = Infinity;
-  let maxDistance = 0;
-  let maxRise = 0;
-  let maxRisePair = null;
-  const basePosition = (platform) => {
+
+  const routeAnchor = (platform) => {
     const motion = platform.motion;
     if (!motion) return { x: platform.x, z: platform.z, top: platform.top };
     if (motion.type === 'orbit') {
       return {
-        x: motion.cx,
-        z: motion.cz,
+        x: motion.cx + Math.cos(motion.phase) * motion.radius,
+        z: motion.cz + Math.sin(motion.phase) * motion.radius,
         top: platform.top
       };
     }
@@ -249,32 +261,130 @@ const oceanStats = await evaluate(`(() => {
     if (motion.type === 'wave') return { x: motion.x0, z: motion.z0, top: motion.baseTop };
     return { x: platform.x, z: platform.z, top: motion.baseTop };
   };
+
+  const fullBounds = (platform) => {
+    const motion = platform.motion;
+    if (!motion) {
+      return {
+        minX: platform.x - platform.half,
+        maxX: platform.x + platform.half,
+        minZ: platform.z - platform.half,
+        maxZ: platform.z + platform.half,
+        minTop: platform.top,
+        maxTop: platform.top
+      };
+    }
+    if (motion.type === 'orbit') {
+      return {
+        minX: motion.cx - motion.radius - platform.half,
+        maxX: motion.cx + motion.radius + platform.half,
+        minZ: motion.cz - motion.radius - platform.half,
+        maxZ: motion.cz + motion.radius + platform.half,
+        minTop: platform.top,
+        maxTop: platform.top
+      };
+    }
+    if (motion.type === 'shuttle') {
+      const xReach = Math.abs(motion.axisX * motion.amplitude);
+      const zReach = Math.abs(motion.axisZ * motion.amplitude);
+      return {
+        minX: motion.x0 - xReach - platform.half,
+        maxX: motion.x0 + xReach + platform.half,
+        minZ: motion.z0 - zReach - platform.half,
+        maxZ: motion.z0 + zReach + platform.half,
+        minTop: platform.top,
+        maxTop: platform.top
+      };
+    }
+    if (motion.type === 'wave') {
+      return {
+        minX: motion.x0 - Math.abs(motion.amplitudeX) - platform.half,
+        maxX: motion.x0 + Math.abs(motion.amplitudeX) + platform.half,
+        minZ: motion.z0 - Math.abs(motion.amplitudeZ) - platform.half,
+        maxZ: motion.z0 + Math.abs(motion.amplitudeZ) + platform.half,
+        minTop: motion.baseTop - motion.amplitudeY,
+        maxTop: motion.baseTop + motion.amplitudeY
+      };
+    }
+    return {
+      minX: platform.x - platform.half,
+      maxX: platform.x + platform.half,
+      minZ: platform.z - platform.half,
+      maxZ: platform.z + platform.half,
+      minTop: motion.baseTop - motion.amplitude,
+      maxTop: motion.baseTop + motion.amplitude
+    };
+  };
+
+  let minDistance = Infinity;
+  let maxDistance = 0;
+  let maxRise = 0;
+  let maxRisePair = null;
+  let routePath = 0;
+  let xDirectionFlips = 0;
+  let previousXDirection = 0;
   for (let i = 1; i < visual.platforms.length; i++) {
     const previous = visual.platforms[i - 1];
     const current = visual.platforms[i];
-    const previousBase = basePosition(previous);
-    const currentBase = basePosition(current);
+    const previousBase = routeAnchor(previous);
+    const currentBase = routeAnchor(current);
     const distance = Math.hypot(currentBase.x - previousBase.x, currentBase.z - previousBase.z);
-    minDistance = Math.min(minDistance, distance);
-    maxDistance = Math.max(maxDistance, distance);
+    routePath += distance;
+    const ordinaryPair = !previous.rotorGroup && !current.rotorGroup;
+    if (ordinaryPair) {
+      minDistance = Math.min(minDistance, distance);
+      maxDistance = Math.max(maxDistance, distance);
+    }
+    const xDelta = currentBase.x - previousBase.x;
+    const xDirection = Math.abs(xDelta) > 0.2 ? Math.sign(xDelta) : 0;
+    if (xDirection && previousXDirection && xDirection !== previousXDirection) xDirectionFlips++;
+    if (xDirection) previousXDirection = xDirection;
     const rise = Math.abs(currentBase.top - previousBase.top);
     if (rise > maxRise) {
       maxRise = rise;
       maxRisePair = [previous.number, current.number, previousBase.top, currentBase.top];
     }
   }
-  const nonAdjacentOverlaps = [];
+
+  const sweepOverlaps = [];
   for (let i = 0; i < visual.platforms.length; i++) {
     for (let j = i + 2; j < visual.platforms.length; j++) {
       const a = visual.platforms[i];
       const b = visual.platforms[j];
-      const overlapX = Math.abs(a.x - b.x) < a.half + b.half + 0.08;
-      const overlapZ = Math.abs(a.z - b.z) < a.half + b.half + 0.08;
-      if (overlapX && overlapZ && Math.abs(a.top - b.top) < 1.55) {
-        nonAdjacentOverlaps.push([a.number, b.number]);
+      if (a.rotorGroup && a.rotorGroup === b.rotorGroup) continue;
+      const aBounds = fullBounds(a);
+      const bBounds = fullBounds(b);
+      const overlapX = aBounds.minX < bBounds.maxX + 0.08 && aBounds.maxX > bBounds.minX - 0.08;
+      const overlapZ = aBounds.minZ < bBounds.maxZ + 0.08 && aBounds.maxZ > bBounds.minZ - 0.08;
+      const overlapTop = aBounds.minTop < bBounds.maxTop + 0.12 && aBounds.maxTop > bBounds.minTop - 0.12;
+      if (overlapX && overlapZ && overlapTop) {
+        sweepOverlaps.push([a.number, b.number, a.rotorGroup || null, b.rotorGroup || null]);
       }
     }
   }
+
+  const rotorGroups = new Map();
+  for (const platform of visual.platforms) {
+    if (!platform.rotorGroup) continue;
+    if (!rotorGroups.has(platform.rotorGroup)) rotorGroups.set(platform.rotorGroup, []);
+    rotorGroups.get(platform.rotorGroup).push(platform);
+  }
+  const rotorGroupStats = [...rotorGroups.entries()].map(([group, platforms]) => {
+    let minChord = Infinity;
+    for (let i = 0; i < platforms.length; i++) {
+      for (let j = i + 1; j < platforms.length; j++) {
+        const phaseDelta = Math.abs(platforms[i].motion.phase - platforms[j].motion.phase) % (Math.PI * 2);
+        const angle = Math.min(phaseDelta, Math.PI * 2 - phaseDelta);
+        minChord = Math.min(minChord, 2 * platforms[i].motion.radius * Math.sin(angle * 0.5));
+      }
+    }
+    return {
+      group,
+      arms: platforms.length,
+      minChord: Number(minChord.toFixed(3))
+    };
+  });
+
   const heightConflicts = [];
   for (const ocean of visual.platforms) {
     for (const height of heightPlatforms) {
@@ -284,14 +394,8 @@ const oceanStats = await evaluate(`(() => {
       }
     }
   }
-  const baseXs = visual.platforms.map((platform) => {
-    const motion = platform.motion;
-    if (!motion) return platform.x;
-    if (motion.type === 'orbit') return motion.cx;
-    if (motion.type === 'shuttle') return motion.x0;
-    if (motion.type === 'wave') return motion.x0;
-    return platform.x;
-  });
+  const anchors = visual.platforms.map(routeAnchor);
+  const baseXs = anchors.map((anchor) => anchor.x);
   return {
     platforms: visual.platforms.length,
     rewards: visual.rewards.length,
@@ -306,28 +410,41 @@ const oceanStats = await evaluate(`(() => {
     maxTop: Math.max(...visual.platforms.map((platform) => platform.top)),
     minDistance,
     maxDistance,
+    routePath: Number(routePath.toFixed(2)),
+    xDirectionFlips,
     maxRise,
     maxRisePair,
-    nonAdjacentOverlaps,
+    sweepOverlaps,
+    rotorGroupStats,
     nextStageLocked: visual.platforms[25].locked,
     heightConflicts,
     baseXMin: Math.min(...baseXs),
     baseXMax: Math.max(...baseXs),
     endZ: visual.platforms[visual.platforms.length - 1].z,
     propKinds: [...new Set(visual.platforms.map((platform) => platform.prop))].filter(Boolean),
+    stageMechanicCount: new Set(visual.platforms.map((platform) => platform.stageMechanic)).size,
+    stageMechanics: [...new Set(visual.platforms.map((platform) => platform.stageMechanic))],
     rewardNumbers: visual.platforms.filter((platform) => platform.reward).map((platform) => platform.number)
   };
 })()`);
 console.log('ocean stats:', JSON.stringify(oceanStats));
 if (oceanStats.platforms !== 500 || oceanStats.rewards !== 20) throw new Error('潮汐远征平台或宝箱数量错误');
-if (oceanStats.dynamic < 150 || oceanStats.wave < 6) throw new Error('潮汐远征动态平台数量不足');
+if (oceanStats.dynamic < 150 || oceanStats.orbit < 20 || oceanStats.lift < 20 || oceanStats.shuttle < 20 || oceanStats.wave < 20) {
+  throw new Error('潮汐远征动态机制类型或数量不足');
+}
+if (oceanStats.stageMechanicCount !== 20) throw new Error('潮汐远征没有形成 20 个不同玩法段');
 if (oceanStats.restricted !== 0) throw new Error('潮汐远征侵入旧关、房屋或北岸区域');
 if (oceanStats.seaPlatforms < 350) throw new Error('潮汐远征进入海面的平台不足');
-if (oceanStats.minDistance < 1.65 || oceanStats.maxDistance > 3.3) throw new Error('潮汐远征相邻距离异常');
+if (oceanStats.minDistance < 1.65 || oceanStats.maxDistance > 3.75) throw new Error('潮汐远征普通相邻距离异常');
 if (oceanStats.maxRise > 0.65) throw new Error('潮汐远征高度差过大');
-if (oceanStats.nonAdjacentOverlaps.length) throw new Error('潮汐远征存在非相邻平台重叠');
+if (oceanStats.sweepOverlaps.length) throw new Error('潮汐远征存在非相邻平台动态轨迹重叠');
+if (oceanStats.rotorGroupStats.length !== 5) throw new Error('潮汐远征旋转阵列数量异常');
+if (oceanStats.rotorGroupStats.some((group) => group.arms < 5 || group.minChord < 1.35)) {
+  throw new Error('潮汐远征旋转阵列存在臂间距过近');
+}
 if (oceanStats.heightConflicts.length) throw new Error('潮汐远征影响到环屋跳高');
 if (oceanStats.baseXMax - oceanStats.baseXMin < 10) throw new Error('潮汐远征缺少防止捷径的折返路线');
+if (oceanStats.routePath < 1200 || oceanStats.xDirectionFlips < 20) throw new Error('潮汐远征路线过直，存在捷径风险');
 if (oceanStats.endZ > -180) throw new Error('潮汐远征没有向远海延伸');
 if (!oceanStats.nextStageLocked) throw new Error('潮汐远征没有阻止跨阶段捷径');
 if (oceanStats.rewardNumbers.some((number, index) => number !== (index + 1) * 25)) {
@@ -400,7 +517,7 @@ const rewardResult = await evaluate(`(() => {
     scoreText: document.getElementById('score-value').textContent,
     stageText: document.getElementById('score-stage').textContent,
     saveText: document.getElementById('save-status').textContent,
-    checkpointStage: state.timer.checkpoint?.stage || null,
+    checkpointStage: state.run.checkpoint?.stage || null,
     savedCheckpoint: JSON.parse(localStorage.getItem('wb-course-progress-v2'))?.courses?.sky?.checkpointNumber || null,
     nextStageUnlocked: !state.beach.courseVisual('sky').platforms[25].locked
   };
@@ -413,7 +530,7 @@ await shoot('02_reward');
 
 await evaluate(`(() => {
   const state = window.__wb.state;
-  const checkpoint = state.timer.checkpoint;
+  const checkpoint = state.run.checkpoint;
   state.player.pos.set(checkpoint.x + 3, checkpoint.top + 2, checkpoint.z);
   state.player.vel.set(0, 0, 0);
   state.player.vy = 0;
@@ -424,7 +541,7 @@ await send('Input.dispatchKeyEvent', { type: 'keyUp', code: 'KeyR', key: 'r', wi
 await sleep(450);
 const restoreResult = await evaluate(`(() => {
   const state = window.__wb.state;
-  const checkpoint = state.timer.checkpoint;
+  const checkpoint = state.run.checkpoint;
   return {
     distance: Math.hypot(state.player.pos.x - checkpoint.x, state.player.pos.z - checkpoint.z),
     topDelta: Math.abs(state.player.pos.y - checkpoint.top)
@@ -435,6 +552,13 @@ if (restoreResult.distance > 0.2 || restoreResult.topDelta > 0.2) {
   throw new Error('按 R 没有返回存档点');
 }
 
+await evaluate(`(() => {
+  const state = window.__wb.state;
+  state.activeCourse = 'ocean';
+  state.run.currentCourse = 'ocean';
+  state.run.checkpoint = state.run.checkpoints.ocean;
+  state.beach.setViewMode('ocean');
+})()`);
 await moveViewTo(
   "window.__wb.state.beach.courseVisual('ocean').rewards[0].platform",
   -0.4,
@@ -464,7 +588,7 @@ await shoot('04_ocean_reward');
 
 await evaluate(`(() => {
   const state = window.__wb.state;
-  const checkpoint = state.timer.checkpoint;
+  const checkpoint = state.run.checkpoint;
   state.player.pos.set(checkpoint.x + 3, checkpoint.top + 2, checkpoint.z);
   state.player.vel.set(0, 0, 0);
   state.player.vy = 0;
@@ -475,7 +599,7 @@ await send('Input.dispatchKeyEvent', { type: 'keyUp', code: 'KeyR', key: 'r', wi
 await sleep(450);
 const oceanRestore = await evaluate(`(() => {
   const state = window.__wb.state;
-  const checkpoint = state.timer.checkpoint;
+  const checkpoint = state.run.checkpoint;
   return {
     course: state.activeCourse,
     distance: Math.hypot(state.player.pos.x - checkpoint.x, state.player.pos.z - checkpoint.z)
@@ -518,9 +642,9 @@ if (
 
 const oceanRescue = await evaluate(`(() => {
   const state = window.__wb.state;
-  state.timer.running = true;
-  state.timer.course = 'ocean';
-  state.timer.start = performance.now();
+  state.activeCourse = 'ocean';
+  state.run.currentCourse = 'ocean';
+  state.run.checkpoint = state.run.checkpoints.ocean;
   state.player.pos.set(0, -1, -30);
   state.player.vel.set(0, 0, 0);
   state.player.vy = 0;
@@ -529,16 +653,16 @@ const oceanRescue = await evaluate(`(() => {
 })()`);
 await waitFor(`(() => {
   const state = window.__wb.state;
-  const checkpoint = state.timer.checkpoints.ocean;
-  return state.timer.course === 'ocean' &&
+  const checkpoint = state.run.checkpoints.ocean;
+  return state.run.currentCourse === 'ocean' &&
     Math.hypot(state.player.pos.x - checkpoint.x, state.player.pos.z - checkpoint.z) < 1;
 })()`);
 const oceanRescueResult = await evaluate(`(() => {
   const state = window.__wb.state;
-  const checkpoint = state.timer.checkpoints.ocean;
+  const checkpoint = state.run.checkpoints.ocean;
   return {
     distance: Math.hypot(state.player.pos.x - checkpoint.x, state.player.pos.z - checkpoint.z),
-    course: state.timer.course
+    course: state.run.currentCourse
   };
 })()`);
 console.log('ocean water rescue:', JSON.stringify(oceanRescueResult));
@@ -548,9 +672,8 @@ if (!oceanRescue || oceanRescueResult.course !== 'ocean' || oceanRescueResult.di
 
 const seaRescue = await evaluate(`(() => {
   const state = window.__wb.state;
-  state.timer.running = true;
-  state.timer.course = 'sea';
-  state.timer.start = performance.now();
+  state.run.currentCourse = 'sea';
+  state.run.checkpoint = null;
   state.player.pos.set(0, -1, -30);
   state.player.vel.set(0, 0, 0);
   state.player.vy = 0;
@@ -560,7 +683,7 @@ const seaRescue = await evaluate(`(() => {
 await waitFor(`(() => {
   const state = window.__wb.state;
   const start = state.beach.courseVisual('sea').platforms[0];
-  return state.timer.course === 'sea' &&
+  return state.run.currentCourse === 'sea' &&
     Math.hypot(state.player.pos.x - start.x, state.player.pos.z - start.z) < 1;
 })()`);
 const seaRescueResult = await evaluate(`(() => {
@@ -568,7 +691,7 @@ const seaRescueResult = await evaluate(`(() => {
   const start = state.beach.courseVisual('sea').platforms[0];
   return {
     distance: Math.hypot(state.player.pos.x - start.x, state.player.pos.z - start.z),
-    course: state.timer.course
+    course: state.run.currentCourse
   };
 })()`);
 console.log('sea water rescue:', JSON.stringify(seaRescueResult));
@@ -578,8 +701,8 @@ if (!seaRescue || seaRescueResult.course !== 'sea' || seaRescueResult.distance >
 
 const idleWaterPosition = await evaluate(`(() => {
   const state = window.__wb.state;
-  state.timer.running = false;
-  state.timer.course = null;
+  state.run.currentCourse = null;
+  state.run.checkpoint = null;
   state.player.pos.set(0, -1, -30);
   state.player.vel.set(0, 0, 0);
   state.player.vy = 0;
@@ -634,25 +757,21 @@ await send('Emulation.setDeviceMetricsOverride', {
   deviceScaleFactor: 1,
   mobile: true
 });
-await evaluate("document.getElementById('timer').classList.remove('hidden')");
 await sleep(500);
 const mobileLayout = await evaluate(`(() => {
   const score = document.getElementById('score-panel').getBoundingClientRect();
-  const timer = document.getElementById('timer').getBoundingClientRect();
   const lock = document.getElementById('lock-tip').getBoundingClientRect();
-  const overlap = !(score.right <= timer.left || score.left >= timer.right || score.bottom <= timer.top || score.top >= timer.bottom);
   const lockOverlap = !(score.right <= lock.left || score.left >= lock.right || score.bottom <= lock.top || score.top >= lock.bottom);
   return {
     score: { left: score.left, top: score.top, right: score.right, bottom: score.bottom },
-    timer: { left: timer.left, top: timer.top, right: timer.right, bottom: timer.bottom },
     lock: { left: lock.left, top: lock.top, right: lock.right, bottom: lock.bottom },
-    overlap,
     lockOverlap,
+    scoreFits: score.left >= 0 && score.right <= innerWidth && score.top >= 0 && score.bottom <= innerHeight,
     lockFits: lock.left >= 0 && lock.right <= innerWidth
   };
 })()`);
 console.log('mobile HUD:', JSON.stringify(mobileLayout));
-if (mobileLayout.overlap) throw new Error('移动端积分面板与计时器重叠');
+if (!mobileLayout.scoreFits) throw new Error('移动端积分面板越界');
 if (mobileLayout.lockOverlap || !mobileLayout.lockFits) throw new Error('移动端锁定提示与 HUD 重叠或越界');
 await shoot('08_mobile');
 

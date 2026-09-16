@@ -59,7 +59,6 @@ function renderScene(scene, sceneCamera) {
 
 const camera = new THREE.PerspectiveCamera(48, window.innerWidth / window.innerHeight, 0.1, 900);
 
-const timerEl = document.getElementById('timer');
 const scorePanel = document.getElementById('score-panel');
 const scoreValueEl = document.getElementById('score-value');
 const scoreStageEl = document.getElementById('score-stage');
@@ -121,34 +120,20 @@ const state = {
   selectOrbit: 0,
   score: savedProgress,
   activeCourse: savedProgress.lastCourse,
-  timer: {
-    running: false,
-    start: 0,
-    course: null,
-    onS: Object.fromEntries(COURSES.map((c) => [c.id, false])),
+  run: {
+    currentCourse: null,
+    onStart: Object.fromEntries(COURSES.map((c) => [c.id, false])),
     checkpoint: null,
     checkpoints: Object.fromEntries(SAVE_COURSE_IDS.map((id) => [id, null]))
   }
 };
-
-/* 关卡榜单：localStorage 持久保存前三名（键 = wb-board-<关卡id>，注册表驱动） */
-const BOARD_KEYS = Object.fromEntries(COURSES.map((c) => [c.id, 'wb-board-' + c.id]));
-function loadBoard(key) {
-  try {
-    const r = JSON.parse(localStorage.getItem(key));
-    return Array.isArray(r) ? r.filter((n) => typeof n === 'number').slice(0, 3) : [];
-  } catch (_) { return []; }
-}
-function saveBoard(key, r) {
-  try { localStorage.setItem(key, JSON.stringify(r)); } catch (_) {}
-}
 
 function saveProgress() {
   try {
     const courses = {};
     for (const id of SAVE_COURSE_IDS) {
       const progress = state.score.courses[id];
-      const checkpoint = state.timer.checkpoints[id];
+      const checkpoint = state.run.checkpoints[id];
       courses[id] = {
         collected: [...progress.collected],
         highestStage: progress.highestStage,
@@ -181,7 +166,7 @@ function updateScoreUI(bump = false) {
   const isComet = state.activeCourse === 'comet';
   dashStatusEl.classList.toggle('hidden', !isComet);
   dashStatusEl.textContent = '星跃充能 ' + progress.dashCharges + ' / ' + DASH_MAX;
-  const checkpoint = state.timer.checkpoints[state.activeCourse];
+  const checkpoint = state.run.checkpoints[state.activeCourse];
   if (!checkpoint || checkpoint.number === 1) {
     saveStatusEl.textContent = (course?.name || '关卡') + '存档：起点';
   } else {
@@ -211,22 +196,6 @@ function showHint(message, duration = 3200) {
   hint._suppressUntil = performance.now() + duration;
   clearTimeout(hint._t);
   hint._t = setTimeout(() => hint.classList.add('hidden'), duration);
-}
-
-function finishCourse(course) {
-  if (!state.timer.running || state.timer.course !== course.id) return null;
-  const finalTime = (performance.now() - state.timer.start) / 1000;
-  state.timer.running = false;
-  state.timer.course = null;
-  timerEl.classList.add('hidden');
-  const records = loadBoard(BOARD_KEYS[course.id]);
-  records.push(finalTime);
-  records.sort((a, b) => a - b);
-  const top = records.slice(0, 3);
-  saveBoard(BOARD_KEYS[course.id], top);
-  state.beach.setBoard(course.id, top);
-  const rank = top.indexOf(finalTime);
-  return { time: finalTime, rank };
 }
 
 const input = createInput(canvas);
@@ -307,7 +276,6 @@ function enterExplore(index) {
       SAVE_COURSE_IDS.map((id) => [id, state.score.courses[id].highestStage])
     );
     state.beach = buildBeachScene({ collectedRewardIds: collectedByCourse, highestStages });
-    for (const c of COURSES) state.beach.setBoard(c.id, loadBoard(BOARD_KEYS[c.id])); // 榜牌载入历史成绩
   }
   const scene = state.beach.scene;
 
@@ -328,10 +296,8 @@ function enterExplore(index) {
   state.rig.initialized = false;
 
   document.getElementById('hud-name').textContent = c.name;
-  state.timer.running = false;
-  state.timer.course = null;
-  for (const id in state.timer.onS) state.timer.onS[id] = false;
-  timerEl.classList.add('hidden');
+  state.run.currentCourse = null;
+  for (const id in state.run.onStart) state.run.onStart[id] = false;
 
   for (const id of SAVE_COURSE_IDS) {
     const course = COURSE_BY_ID.get(id);
@@ -343,12 +309,12 @@ function enterExplore(index) {
       ? course.platforms.find((platform) => platform.number === progress.checkpointNumber)
       : null;
     const checkpoint = collectedRewards[0]?.platform || restoredCheckpoint || course.platforms[0];
-    state.timer.checkpoints[id] = checkpoint;
+    state.run.checkpoints[id] = checkpoint;
     progress.checkpointNumber = checkpoint.number;
     if (id === 'comet' && checkpoint.number > 1) progress.dashCharges = DASH_MAX;
   }
   if (!SAVE_COURSE_IDS.includes(state.activeCourse)) state.activeCourse = 'sky';
-  state.timer.checkpoint = state.timer.checkpoints[state.activeCourse];
+  state.run.checkpoint = state.run.checkpoints[state.activeCourse];
   const activeDefinition = COURSE_BY_ID.get(state.activeCourse);
   hudSubEl.textContent = activeDefinition.name + ' · 500 阶';
   state.beach.setViewMode(state.activeCourse);
@@ -399,8 +365,8 @@ window.addEventListener('keydown', (e) => {
       doorSfx(door.open);
     }
   } else if (e.code === 'KeyR') {
-    const courseId = SAVE_COURSE_IDS.includes(state.timer.course) ? state.timer.course : state.activeCourse;
-    const checkpoint = state.timer.checkpoints[courseId];
+    const courseId = SAVE_COURSE_IDS.includes(state.run.currentCourse) ? state.run.currentCourse : state.activeCourse;
+    const checkpoint = state.run.checkpoints[courseId];
     const course = COURSE_BY_ID.get(courseId);
     const start = course.platforms[0];
     const nearStart = Math.hypot(state.player.pos.x - start.x, state.player.pos.z - start.z) < 8;
@@ -408,7 +374,7 @@ window.addEventListener('keydown', (e) => {
       state.player.pos.x - checkpoint.x,
       state.player.pos.z - checkpoint.z
     ) < 10;
-    if (checkpoint && (state.timer.course === courseId || nearStart || nearCheckpoint)) {
+    if (checkpoint && (state.run.currentCourse === courseId || nearStart || nearCheckpoint)) {
       respawnAtCheckpoint(courseId);
     } else {
       showHint('前往对应长关起点后按 R 载入存档', 2200);
@@ -451,14 +417,12 @@ function resetAllProgress() {
       dashCharges: DASH_MAX,
       savedAt: 0
     };
-    state.timer.checkpoints[id] = null;
+    state.run.checkpoints[id] = null;
   }
   state.activeCourse = 'sky';
-  state.timer.running = false;
-  state.timer.course = null;
-  state.timer.checkpoint = null;
-  for (const id in state.timer.onS) state.timer.onS[id] = false;
-  timerEl.classList.add('hidden');
+  state.run.currentCourse = null;
+  state.run.checkpoint = null;
+  for (const id in state.run.onStart) state.run.onStart[id] = false;
 
   if (state.mode === 'explore') {
     const selected = state.selected;
@@ -502,26 +466,20 @@ function switchCourse() {
   const currentIndex = Math.max(0, SAVE_COURSE_IDS.indexOf(state.activeCourse));
   const nextId = SAVE_COURSE_IDS[(currentIndex + 1) % SAVE_COURSE_IDS.length];
   const nextCourse = COURSE_BY_ID.get(nextId);
-  const timerWasRunning = state.timer.running;
-
-  if (timerWasRunning) {
-    state.timer.running = false;
-    state.timer.course = null;
-    timerEl.classList.add('hidden');
-  }
 
   respawnAtCheckpoint(
     nextId,
-    '已切换至' + nextCourse.name + (timerWasRunning ? ' · 本次计时已取消' : '')
+    '已切换至' + nextCourse.name
   );
 }
 
 function respawnAtCheckpoint(courseId = state.activeCourse, hintMessage = null) {
-  const checkpoint = state.timer.checkpoints[courseId];
+  const checkpoint = state.run.checkpoints[courseId];
   if (!state.player || !checkpoint) return;
   const course = COURSE_BY_ID.get(courseId);
   state.activeCourse = courseId;
-  state.timer.checkpoint = checkpoint;
+  state.run.currentCourse = courseId;
+  state.run.checkpoint = checkpoint;
   state.beach.setViewMode(courseId);
   if (courseId === 'comet') {
     state.score.courses.comet.dashCharges = DASH_MAX;
@@ -562,8 +520,9 @@ function collectReward(reward) {
   progress.highestStage = Math.max(progress.highestStage, opened.stage);
   progress.checkpointNumber = opened.platform.number;
   if (opened.courseId === 'comet') progress.dashCharges = DASH_MAX;
-  state.timer.checkpoints[opened.courseId] = opened.platform;
-  state.timer.checkpoint = opened.platform;
+  state.run.checkpoints[opened.courseId] = opened.platform;
+  state.run.currentCourse = opened.courseId;
+  state.run.checkpoint = opened.platform;
   state.activeCourse = opened.courseId;
   state.beach.setViewMode(opened.courseId);
   state.beach.setCourseStage(opened.courseId, opened.stage);
@@ -579,16 +538,12 @@ function collectReward(reward) {
     state.beach.courseVisual(opened.courseId).spawnConfetti();
     rewardSfx(true);
     goalSfx();
-    const result = finishCourse(course);
     const finishText = opened.courseId === 'ocean'
       ? '抵达深海之眼！'
       : opened.courseId === 'comet'
         ? '抵达光年彼岸！'
         : '登顶成功！';
-    let message = finishText + ' + ' + opened.points.toLocaleString('zh-CN') + ' 积分';
-    if (result) {
-      message += ' · 用时 ' + result.time.toFixed(2) + ' 秒' + (result.rank >= 0 ? '，第 ' + (result.rank + 1) + ' 名' : '');
-    }
+    const message = finishText + ' + ' + opened.points.toLocaleString('zh-CN') + ' 积分';
     showHint(message, 5600);
     return;
   }
@@ -670,54 +625,46 @@ function frame(now) {
       }
     }
 
-    // 计时器（注册表驱动）：踩上任意关卡的第一级台开始/重新计时；落到地面立即结束
+    // 关卡起跑检测：记录玩家当前进入的路线，用于独立的落水与坠落救援。
     const tp = state.player.pos;
     for (const { course: c, start: s } of COURSE_STARTS) {
       const on = Math.abs(tp.x - s.x) < s.half + 0.05 && Math.abs(tp.z - s.z) < s.half + 0.05 && Math.abs(tp.y - s.top) < 0.25;
-      if (on && !state.timer.onS[c.id]) {
-        state.timer.running = true;
-        state.timer.course = c.id;
-        state.timer.start = performance.now();
+      if (on && !state.run.onStart[c.id]) {
+        state.run.currentCourse = c.id;
         if (SAVE_COURSE_IDS.includes(c.id)) {
           state.activeCourse = c.id;
-          state.timer.checkpoint = state.timer.checkpoints[c.id] || s;
+          state.run.checkpoint = state.run.checkpoints[c.id] || s;
           state.beach.setViewMode(c.id);
           hudSubEl.textContent = c.name + ' · 500 阶';
           updateScoreUI(false);
           updateCourseSwitchButton();
-        } else if (!state.timer.checkpoint) {
-          state.timer.checkpoint = s;
         }
-        timerEl.classList.remove('hidden');
       }
-      state.timer.onS[c.id] = on;
+      state.run.onStart[c.id] = on;
     }
-    if (state.timer.running) {
-      timerEl.textContent = ((performance.now() - state.timer.start) / 1000).toFixed(2);
-      // 一旦落回地面（非任何平台），计时结束、成绩不作数（阈值 0.15 防止起点台误判）
-      if (state.timer.course === 'ocean' && tp.y < WATER_LEVEL + 0.02) {
-        splashSfx();
-        respawnAtCheckpoint('ocean');
-      } else if (state.timer.course === 'sea' && tp.y < WATER_LEVEL - 0.05 && tp.z < -3.2) {
-        respawnAtSeaStart();
-      } else if (state.player.onGround && Math.abs(tp.y - terrainHeight(tp.x, tp.z)) < 0.15) {
-        if (SAVE_COURSE_IDS.includes(state.timer.course)) {
-          respawnAtCheckpoint(state.timer.course);
-        } else {
-          state.timer.running = false;
-          state.timer.course = null;
-          timerEl.classList.add('hidden');
-        }
-      }
 
-      if ((state.timer.course === 'sky' || state.timer.course === 'comet') && state.timer.checkpoint) {
-        const fallFloor = Math.max(1.0, state.timer.checkpoint.top - 14);
-        if (tp.y < fallFloor) respawnAtCheckpoint(state.timer.course);
+    // 落水与坠落救援按当前路线分流；第一关和海洋关互不复用。
+    const runCourse = state.run.currentCourse;
+    if (runCourse === 'ocean' && tp.y < WATER_LEVEL + 0.02) {
+      splashSfx();
+      respawnAtCheckpoint('ocean');
+    } else if (runCourse === 'comet' && tp.y < WATER_LEVEL + 0.02) {
+      splashSfx();
+      respawnAtCheckpoint('comet');
+    } else if (runCourse === 'sea' && tp.y < WATER_LEVEL - 0.05 && tp.z < -3.2) {
+      respawnAtSeaStart();
+    } else if (
+      runCourse &&
+      state.player.onGround &&
+      Math.abs(tp.y - terrainHeight(tp.x, tp.z)) < 0.15
+    ) {
+      if (SAVE_COURSE_IDS.includes(runCourse)) {
+        respawnAtCheckpoint(runCourse);
       }
-      if (state.timer.course === 'comet' && tp.y < WATER_LEVEL + 0.02) {
-        splashSfx();
-        respawnAtCheckpoint('comet');
-      }
+    }
+    if ((runCourse === 'sky' || runCourse === 'comet') && state.run.checkpoint) {
+      const fallFloor = Math.max(1.0, state.run.checkpoint.top - 14);
+      if (tp.y < fallFloor) respawnAtCheckpoint(runCourse);
     }
 
     // 门口提示
@@ -749,7 +696,7 @@ function frame(now) {
       }
     }
 
-    // 关卡终点（注册表驱动）：靠近宝箱 → 开箱、计时结束、成绩上榜（每关一次性）
+    // 关卡终点（注册表驱动）：靠近宝箱后开箱并播放完成反馈。
     const goalCount = STATIC_COURSE_GOAL_IDS.length + 1;
     for (let i = 0; i < goalCount; i++) {
       const courseId = i === 0 ? state.activeCourse : STATIC_COURSE_GOAL_IDS[i - 1];
@@ -761,13 +708,7 @@ function frame(now) {
         state.beach.courseVisual(courseId).spawnConfetti();
         goalSfx();
         const course = COURSE_BY_ID.get(courseId);
-        let msg = '「' + course.name + '」关卡完成！宝箱已开启';
-        const result = finishCourse(course);
-        if (result) {
-          msg = '「' + course.name + '」完成！用时 ' + result.time.toFixed(2) + ' 秒' +
-            (result.rank >= 0 ? '，登上第 ' + (result.rank + 1) + ' 名！' : '');
-        }
-        showHint(msg, 4200);
+        showHint('「' + course.name + '」关卡完成！宝箱已开启', 4200);
       }
     }
 

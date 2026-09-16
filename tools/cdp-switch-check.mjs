@@ -1,7 +1,7 @@
 /**
  * 长关切换专项 CDP 检查：
  *   1. 验证按钮和 T 键按固定顺序切换三个 500 台长关
- *   2. 验证切换会取消计时，但不会清空积分、宝箱或检查点
+ *   2. 验证切换不会清空积分、宝箱或检查点
  *   3. 验证三个长关存档互不覆盖，星跃切换后恢复 3 / 3 充能
  *   4. 验证移动端两个 HUD 操作按钮不重叠且不越界
  *
@@ -133,13 +133,16 @@ const initial = await evaluate(`(() => {
   state.score.courses.ocean.highestStage = 2;
   state.score.courses.comet.highestStage = 3;
   state.score.courses.comet.dashCharges = 0;
-  state.timer.checkpoints.sky = sky;
-  state.timer.checkpoints.ocean = ocean;
-  state.timer.checkpoints.comet = comet;
-  state.timer.running = true;
-  state.timer.course = 'sky';
-  state.timer.start = performance.now() - 5000;
-  document.getElementById('timer').classList.remove('hidden');
+  for (const [id, checkpoint] of [['sky', sky], ['ocean', ocean], ['comet', comet]]) {
+    const reward = state.beach.courseVisual(id).rewards.find((item) => item.platform === checkpoint);
+    state.score.courses[id].collected.add(reward.id);
+    state.beach.courseVisual(id).setRewardOpened(reward.id, false);
+  }
+  state.run.checkpoints.sky = sky;
+  state.run.checkpoints.ocean = ocean;
+  state.run.checkpoints.comet = comet;
+  state.run.currentCourse = 'sky';
+  state.run.checkpoint = sky;
   return {
     activeCourse: state.activeCourse,
     button: document.getElementById('course-switch').textContent,
@@ -158,13 +161,10 @@ const afterButton = await evaluate(`(() => {
   const saved = JSON.parse(localStorage.getItem('wb-course-progress-v2'));
   return {
     activeCourse: state.activeCourse,
-    timerRunning: state.timer.running,
-    timerCourse: state.timer.course,
-    timerHidden: document.getElementById('timer').classList.contains('hidden'),
-    checkpoint: state.timer.checkpoint?.number,
+    checkpoint: state.run.checkpoint?.number,
     playerDistance: Math.hypot(
-      state.player.pos.x - state.timer.checkpoint.x,
-      state.player.pos.z - state.timer.checkpoint.z
+      state.player.pos.x - state.run.checkpoint.x,
+      state.player.pos.z - state.run.checkpoint.z
     ),
     hud: document.getElementById('hud-sub').textContent,
     button: document.getElementById('course-switch').textContent,
@@ -178,8 +178,6 @@ const afterButton = await evaluate(`(() => {
   };
 })()`);
 assert(afterButton.activeCourse === 'ocean', '按钮没有切换到潮汐远征');
-assert(!afterButton.timerRunning && afterButton.timerCourse === null, '切换后计时没有取消');
-assert(afterButton.timerHidden, '切换后计时器没有隐藏');
 assert(afterButton.checkpoint === initial.ocean && afterButton.playerDistance < 0.2, '没有回到海洋关卡检查点');
 assert(afterButton.hud.includes('潮汐远征'), 'HUD 没有更新海洋关卡名称');
 assert(afterButton.button === '切换：星跃追光', '海洋关切换按钮文案错误');
@@ -198,7 +196,7 @@ const afterKey = await evaluate(`(() => {
     activeCourse: state.activeCourse,
     charges: state.score.courses.comet.dashCharges,
     savedCharge: saved.courses.comet.dashCharges,
-    checkpoint: state.timer.checkpoint?.number,
+    checkpoint: state.run.checkpoint?.number,
     button: document.getElementById('course-switch').textContent,
     savedLastCourse: saved.lastCourse
   };
@@ -217,7 +215,7 @@ const afterLoop = await evaluate(`(() => {
   return {
     activeCourse: state.activeCourse,
     points: state.score.points,
-    checkpoint: state.timer.checkpoint?.number,
+    checkpoint: state.run.checkpoint?.number,
     savedLastCourse: saved.lastCourse,
     checkpoints: {
       sky: saved.courses.sky.checkpointNumber,

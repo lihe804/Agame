@@ -364,145 +364,491 @@ const SKY_COURSE_DATA = makeSkyCourse();
 const SKY_LAST_PLATFORM = SKY_COURSE_DATA.platforms[SKY_COURSE_DATA.platforms.length - 1];
 
 /* ================= 潮汐远征生成器 =================
- * 从东侧海岸沿蜿蜒折返路线向远海延伸，同样 500 台、每 25 台一个宝箱。
- * 长桥、升降、横漂、波浪与漩涡段交替，路线避开房屋和旧深海关卡。 */
+ * 500 台分为 20 个玩法段，每段 24 个挑战台 + 1 个宝箱台。
+ * 主航道使用宽幅折返而不是重复 S 曲线；每段再叠加不同的洋流运动，
+ * 包含潮门升降、浮标横漂、浪涌、海沟列车与真正的旋转跳台阵列。 */
 
 const OCEAN_PLATFORM_TOTAL = 500;
 const OCEAN_REWARD_INTERVAL = 25;
+const OCEAN_MIN_X = 28;
+const OCEAN_MAX_X = 70;
+const OCEAN_MIN_Z = -3000;
+const OCEAN_SHORTCUT_CLEARANCE = 4.35;
+const OCEAN_PLATFORM_GAP = 0.2;
+const OCEAN_TURN_MARGIN = 10.2;
 
 function makeOceanCurrentCourse() {
-  const stageNames = [
-    '潮汐码头', '浮标迷阵', '珊瑚拱门', '鲸背跃迁', '沉船断桥',
-    '海风转盘', '漂流木阵', '灯塔回廊', '浪尖阶梯', '海沟缆桥',
-    '贝壳跳岛', '暴潮回旋', '桅杆森林', '深海列车', '蓝洞环线',
-    '远洋孤标', '逆流长桥', '鲸歌航道', '海渊门扉', '归航灯塔'
-  ];
   const themeNames = ['reef', 'tide', 'wreck', 'shell', 'deep'];
   const themes = {
-    reef: { deck: 0x6f9d83, trim: 0x9de3b2 },
-    tide: { deck: 0x668ba5, trim: 0x7ad8e8 },
-    wreck: { deck: 0x8f745c, trim: 0xe0a866 },
-    shell: { deck: 0x9b8490, trim: 0xf2c6ac },
-    deep: { deck: 0x566f88, trim: 0x72b8d4 }
+    reef: { deck: 0x5f927b, trim: 0x9de3b2 },
+    tide: { deck: 0x5f849f, trim: 0x78d9ea },
+    wreck: { deck: 0x8d7057, trim: 0xe1a863 },
+    shell: { deck: 0x947d89, trim: 0xf0c5ad },
+    deep: { deck: 0x506b86, trim: 0x73b9da }
   };
-  const props = ['buoy', 'lily', 'coral', 'crate', 'wreck', 'shell', 'lamp', 'whale', 'gate', 'raft'];
+  const stagePlans = [
+    {
+      name: '潮汐码头', kind: 'weave', runs: [7, 8, 6],
+      half: [0.56, 0.62, 0.54], topBase: 1.18, topWave: 0.18,
+      props: ['buoy', 'lamp', 'crate', 'gate']
+    },
+    {
+      name: '浮标迷阵', kind: 'slalom', runs: [5, 4, 6],
+      half: [0.48, 0.46, 0.52], topBase: 1.25, topWave: 0.14,
+      props: ['buoy', 'buoy', 'gate', 'lily']
+    },
+    {
+      name: '珊瑚折线', kind: 'switchback', runs: [3, 4, 3],
+      half: [0.44, 0.48, 0.45], topBase: 1.34, topWave: 0.2,
+      props: ['coral', 'coral', 'shell', 'gate']
+    },
+    {
+      name: '沉船肋骨', kind: 'ribs', runs: [6, 5, 7],
+      half: [0.43, 0.61, 0.47], topBase: 1.16, topWave: 0.3,
+      props: ['wreck', 'crate', 'wreck', 'shell']
+    },
+    {
+      name: '海风转盘', kind: 'carousel', runs: [5, 6, 5],
+      half: [0.46, 0.49, 0.52], topBase: 1.3, topWave: 0.16,
+      props: ['gate', 'lamp', 'whale', 'buoy']
+    },
+    {
+      name: '潮门节拍', kind: 'lifts', runs: [5, 7, 6],
+      half: [0.47, 0.52, 0.48], topBase: 1.42, topWave: 0.22,
+      props: ['gate', 'lamp', 'gate', 'crate']
+    },
+    {
+      name: '漂流信标', kind: 'drift', runs: [8, 7, 9],
+      half: [0.48, 0.52, 0.5], topBase: 1.28, topWave: 0.26,
+      props: ['lamp', 'lily', 'buoy', 'gate']
+    },
+    {
+      name: '贝壳跳岛', kind: 'shells', runs: [3, 5, 4],
+      half: [0.39, 0.42, 0.47], topBase: 1.35, topWave: 0.2,
+      props: ['shell', 'coral', 'lily', 'shell']
+    },
+    {
+      name: '灯塔横风', kind: 'crosswind', runs: [8, 6, 7],
+      half: [0.45, 0.49, 0.46], topBase: 1.48, topWave: 0.28,
+      props: ['lamp', 'gate', 'lamp', 'shell']
+    },
+    {
+      name: '海沟列车', kind: 'tram', runs: [10, 9, 11],
+      half: [0.5, 0.55, 0.48], topBase: 1.3, topWave: 0.18,
+      props: ['crate', 'wreck', 'lamp', 'gate']
+    },
+    {
+      name: '蓝洞环线', kind: 'bluehole', runs: [5, 4, 5],
+      half: [0.46, 0.49, 0.52], topBase: 1.46, topWave: 0.2,
+      props: ['gate', 'lamp', 'whale', 'lily']
+    },
+    {
+      name: '风暴脉冲', kind: 'rhythm', runs: [6, 5, 6],
+      half: [0.44, 0.5, 0.47], topBase: 1.38, topWave: 0.32,
+      props: ['gate', 'lamp', 'buoy', 'wreck']
+    },
+    {
+      name: '岔流回廊', kind: 'rapids', runs: [4, 5, 3],
+      half: [0.46, 0.54, 0.48], topBase: 1.32, topWave: 0.24,
+      props: ['gate', 'coral', 'crate', 'buoy']
+    },
+    {
+      name: '鲸骨回旋', kind: 'leviathan', runs: [6, 7, 5],
+      half: [0.43, 0.5, 0.46], topBase: 1.45, topWave: 0.26,
+      props: ['whale', 'wreck', 'whale', 'shell']
+    },
+    {
+      name: '月池星阵', kind: 'moons', runs: [5, 6, 4],
+      half: [0.46, 0.49, 0.51], topBase: 1.36, topWave: 0.2,
+      props: ['lily', 'lamp', 'gate', 'shell']
+    },
+    {
+      name: '海藻迷宫', kind: 'maze', runs: [3, 4, 3],
+      half: [0.4, 0.44, 0.47], topBase: 1.24, topWave: 0.22,
+      props: ['lily', 'coral', 'lily', 'crate']
+    },
+    {
+      name: '深眼涡壁', kind: 'eye', runs: [6, 7, 5],
+      half: [0.45, 0.49, 0.52], topBase: 1.5, topWave: 0.3,
+      props: ['whale', 'gate', 'coral', 'lamp']
+    },
+    {
+      name: '逆潮折返', kind: 'riptide', runs: [7, 5, 6],
+      half: [0.44, 0.52, 0.47], topBase: 1.36, topWave: 0.24,
+      props: ['buoy', 'gate', 'buoy', 'crate']
+    },
+    {
+      name: '海渊门扉', kind: 'gates', runs: [6, 8, 7],
+      half: [0.46, 0.51, 0.48], topBase: 1.52, topWave: 0.28,
+      props: ['gate', 'gate', 'lamp', 'wreck']
+    },
+    {
+      name: '归潮之心', kind: 'heart', runs: [5, 6, 4],
+      half: [0.45, 0.5, 0.54], topBase: 1.42, topWave: 0.34,
+      props: ['whale', 'gate', 'lamp', 'coral']
+    }
+  ];
+
+  const rnd = makeSeededRandom(0x0cea7e);
   const platforms = [];
   const rotors = [];
-  const curvePoint = (t) => ({
-    x: 47 + 18 * Math.sin(t + 0.5) + 3.5 * Math.sin(1.4 * t + 0.2),
-    z: 4 - 1.85 * t + 1.05 * Math.sin(0.8 * t),
-    dx: 18 * Math.cos(t + 0.5) + 4.9 * Math.cos(1.4 * t + 0.2),
-    dz: -1.85 + 0.84 * Math.cos(0.8 * t)
-  });
-  const advanceAlongCurve = (origin, originT) => {
-    let low = originT;
-    let high = originT + 0.25;
-    while (Math.hypot(curvePoint(high).x - origin.x, curvePoint(high).z - origin.z) < 2.82) high += 0.25;
-    for (let i = 0; i < 24; i++) {
-      const mid = (low + high) * 0.5;
-      const point = curvePoint(mid);
-      if (Math.hypot(point.x - origin.x, point.z - origin.z) < 2.82) low = mid;
-      else high = mid;
-    }
-    return (low + high) * 0.5;
+  const pose = { x: 47, z: 4, top: 1.18, heading: -0.14 };
+  let firstPlatform = true;
+  let laneDirection = 1;
+  let laneRun = 8;
+  let laneRunIndex = 0;
+  let turnArc = null;
+  let turnIndex = 0;
+  let ignoreTailCount = 1;
+  let forcedHeading = null;
+  let forcedSteps = 0;
+  let exitRotorGroup = null;
+
+  const planAt = (stage) => stagePlans[stage];
+
+  const chooseLaneRun = (stage) => {
+    const runs = planAt(stage).runs;
+    const next = runs[laneRunIndex++ % runs.length];
+    return Math.max(8, Math.min(10, next + (rnd() < 0.34 ? -1 : 0)));
   };
 
-  let t = 0;
-  for (let number = 1; number <= OCEAN_PLATFORM_TOTAL; number++) {
-    const point = curvePoint(t);
-    const stage = Math.floor((number - 1) / OCEAN_REWARD_INTERVAL);
-    const step = (number - 1) % OCEAN_REWARD_INTERVAL;
-    const progress = (number - 1) / (OCEAN_PLATFORM_TOTAL - 1);
+  const makeTurnArc = (direction) => direction > 0
+    ? [
+        { heading: -1.57, length: 2.9 },
+        { heading: -1.95, length: 2.9 },
+        { heading: -2.3, length: 2.9 },
+        { heading: -2.65, length: 2.9 }
+      ]
+    : [
+        { heading: -1.57, length: 2.9 },
+        { heading: -1.2, length: 2.9 },
+        { heading: -0.85, length: 2.9 },
+        { heading: -0.5, length: 2.9 }
+      ];
+
+  const clampTop = (value) => Math.max(0.62, Math.min(2.08, value));
+
+  const canTurnAtNextPlatform = () =>
+    pose.x + OCEAN_TURN_MARGIN * laneDirection <= OCEAN_MIN_X ||
+    pose.x + OCEAN_TURN_MARGIN * laneDirection >= OCEAN_MAX_X;
+
+  const horizontalBounds = (platform) => {
+    if (platform.rotorCenter) {
+      return {
+        minX: platform.rotorCenter.x - platform.rotorRadius - platform.half,
+        maxX: platform.rotorCenter.x + platform.rotorRadius + platform.half,
+        minZ: platform.rotorCenter.z - platform.rotorRadius - platform.half,
+        maxZ: platform.rotorCenter.z + platform.rotorRadius + platform.half
+      };
+    }
+    const motion = platform.motion;
+    if (!motion) {
+      return {
+        minX: platform.x - platform.half,
+        maxX: platform.x + platform.half,
+        minZ: platform.z - platform.half,
+        maxZ: platform.z + platform.half
+      };
+    }
+    if (motion.type === 'orbit') {
+      return {
+        minX: motion.cx - motion.radius - platform.half,
+        maxX: motion.cx + motion.radius + platform.half,
+        minZ: motion.cz - motion.radius - platform.half,
+        maxZ: motion.cz + motion.radius + platform.half
+      };
+    }
+    if (motion.type === 'shuttle') {
+      const xReach = Math.abs(motion.axisX * motion.amplitude);
+      const zReach = Math.abs(motion.axisZ * motion.amplitude);
+      return {
+        minX: motion.x0 - xReach - platform.half,
+        maxX: motion.x0 + xReach + platform.half,
+        minZ: motion.z0 - zReach - platform.half,
+        maxZ: motion.z0 + zReach + platform.half
+      };
+    }
+    if (motion.type === 'wave') {
+      return {
+        minX: motion.x0 - Math.abs(motion.amplitudeX) - platform.half,
+        maxX: motion.x0 + Math.abs(motion.amplitudeX) + platform.half,
+        minZ: motion.z0 - Math.abs(motion.amplitudeZ) - platform.half,
+        maxZ: motion.z0 + Math.abs(motion.amplitudeZ) + platform.half
+      };
+    }
+    return {
+      minX: platform.x - platform.half,
+      maxX: platform.x + platform.half,
+      minZ: platform.z - platform.half,
+      maxZ: platform.z + platform.half
+    };
+  };
+
+  const conflictsWithPlatform = (candidate, platform, index, options = {}) => {
+    if (options.ignoreRotorGroup && platform.rotorGroup === options.ignoreRotorGroup) return false;
+
+    const a = horizontalBounds(candidate);
+    const b = horizontalBounds(platform);
+    const overlaps =
+      a.minX < b.maxX + OCEAN_PLATFORM_GAP &&
+      a.maxX > b.minX - OCEAN_PLATFORM_GAP &&
+      a.minZ < b.maxZ + OCEAN_PLATFORM_GAP &&
+      a.maxZ > b.minZ - OCEAN_PLATFORM_GAP;
+    if (overlaps) return true;
+
+    const ignoredForShortcut =
+      (options.ignoreRecent && index >= platforms.length - options.ignoreRecent) ||
+      (
+        options.ignoreSameRotor &&
+        candidate.rotorGroup &&
+        platform.rotorGroup === candidate.rotorGroup
+      );
+    if (ignoredForShortcut) return false;
+
+    const centerDistance = Math.hypot(candidate.x - platform.x, candidate.z - platform.z);
+    return Math.abs(candidate.top - platform.top) < 1.05 && centerDistance < OCEAN_SHORTCUT_CLEARANCE;
+  };
+
+  const candidateConflicts = (candidate, options = {}) =>
+    platforms.some((platform, index) => conflictsWithPlatform(candidate, platform, index, options));
+
+  const routeProfile = (kind) => {
+    if (kind === 'weave') return { z: -0.72, sway: 0.42, frequency: 0.72 };
+    if (kind === 'slalom') return { z: -0.82, sway: 0.72, frequency: 1.45 };
+    if (kind === 'switchback') return { z: -0.78, sway: 0.34, frequency: 0.8 };
+    if (kind === 'ribs') return { z: -0.68, sway: 0.68, frequency: 0.92 };
+    if (kind === 'carousel') return { z: -0.76, sway: 0.5, frequency: 0.65 };
+    if (kind === 'lifts') return { z: -0.64, sway: 0.46, frequency: 0.85 };
+    if (kind === 'drift') return { z: -0.94, sway: 0.5, frequency: 0.58 };
+    if (kind === 'shells') return { z: -0.72, sway: 0.82, frequency: 1.1 };
+    if (kind === 'crosswind') return { z: -0.8, sway: 0.68, frequency: 1.2 };
+    if (kind === 'tram') return { z: -0.58, sway: 0.26, frequency: 0.45 };
+    if (kind === 'bluehole') return { z: -0.74, sway: 0.44, frequency: 0.72 };
+    if (kind === 'rhythm') return { z: -0.72, sway: 0.62, frequency: 1.65 };
+    if (kind === 'rapids') return { z: -0.88, sway: 0.92, frequency: 1.46 };
+    if (kind === 'leviathan') return { z: -0.66, sway: 0.5, frequency: 0.7 };
+    if (kind === 'moons') return { z: -0.7, sway: 0.42, frequency: 0.62 };
+    if (kind === 'maze') return { z: -0.78, sway: 0.78, frequency: 1.28 };
+    if (kind === 'eye') return { z: -0.6, sway: 0.38, frequency: 0.6 };
+    if (kind === 'riptide') return { z: -0.9, sway: 0.96, frequency: 1.18 };
+    if (kind === 'gates') return { z: -0.62, sway: 0.3, frequency: 0.55 };
+    return { z: -0.7, sway: 0.64, frequency: 0.84 };
+  };
+
+  const baseCandidate = (stage, step, x, z, top, extra) => {
+    const candidate = {
+      x,
+      z,
+      top,
+      half: extra.half ?? 0.5,
+      rotorGroup: extra.rotorGroup,
+      rotorCenter: extra.rotorCenter,
+      rotorRadius: extra.rotorRadius
+    };
+    if (extra.motionType) {
+      candidate.motion = motionFor(extra.motionType, candidate, stage, step);
+    } else if (extra.motion) {
+      candidate.motion = extra.motion;
+    }
+    return candidate;
+  };
+
+  const advanceBase = (stage, step, extra = {}) => {
+    const plan = planAt(stage);
+    const profile = routeProfile(plan.kind);
+    if (
+      forcedSteps === 0 &&
+      !turnArc &&
+      (
+        pose.x + OCEAN_TURN_MARGIN * laneDirection < OCEAN_MIN_X ||
+        pose.x + OCEAN_TURN_MARGIN * laneDirection > OCEAN_MAX_X
+      )
+    ) {
+      laneRun = 0;
+    }
+    if (forcedSteps === 0 && !turnArc && laneRun <= 0) {
+      if (canTurnAtNextPlatform()) {
+        turnArc = makeTurnArc(laneDirection);
+        turnIndex = 0;
+      } else {
+        laneRun = 2;
+      }
+    }
+
+    const turnPoint = turnArc ? turnArc[turnIndex] : null;
+    const preferredZ = profile.z + Math.sin((platforms.length + stage * 5) * profile.frequency) * profile.sway;
+    const preferredHeading = forcedSteps > 0
+      ? forcedHeading
+      : turnPoint
+        ? turnPoint.heading
+        : Math.atan2(preferredZ, 2.8 * laneDirection);
+    const normalHeading = forcedSteps > 0
+      ? forcedHeading
+      : Math.atan2(preferredZ, 2.8 * laneDirection);
+    const angleOffsets = [
+      0, 0.12, -0.12, 0.24, -0.24, 0.38, -0.38, 0.55, -0.55,
+      0.76, -0.76, 1.02, -1.02, 1.35, -1.35, 1.7, -1.7, 2.1, -2.1
+    ];
+    const stepScales = [1, 0.96, 1.04, 0.92, 1.08, 0.84, 1.14];
+    const targetTop = plan.topBase + Math.sin((platforms.length + stage * 4) * 0.17) * plan.topWave;
+    const rejectedCandidates = [];
+    const findCandidate = (baseHeading, stepLength) => {
+      rejectedCandidates.length = 0;
+      for (const offset of angleOffsets) {
+        for (const scale of stepScales) {
+          const heading = baseHeading + offset;
+          const length = stepLength * scale;
+          const x = pose.x + Math.cos(heading) * length;
+          const z = pose.z + Math.sin(heading) * length;
+          if (x < OCEAN_MIN_X || x > OCEAN_MAX_X || z > 12 || z < OCEAN_MIN_Z) continue;
+          const deltaX = x - pose.x;
+          const deltaZ = z - pose.z;
+          if (deltaZ > (turnArc ? -1.8 : -0.35)) continue;
+          if (!turnArc && forcedSteps === 0 && deltaX * laneDirection < 0.45) continue;
+          const topStep = Math.max(-0.42, Math.min(0.42, targetTop - pose.top));
+          const top = clampTop(pose.top + topStep);
+          const candidate = baseCandidate(stage, step, x, z, top, extra);
+          if (!candidateConflicts(candidate, {
+            ignoreRecent: turnArc ? 4 : ignoreTailCount,
+            ignoreSameRotor: Boolean(candidate.rotorGroup),
+            ignoreRotorGroup: exitRotorGroup
+          })) {
+            return { x, z, top, heading };
+          }
+          const blocker = platforms.find((platform, index) =>
+            conflictsWithPlatform(candidate, platform, index, {
+              ignoreRecent: turnArc ? 4 : ignoreTailCount,
+              ignoreSameRotor: Boolean(candidate.rotorGroup),
+              ignoreRotorGroup: exitRotorGroup
+            })
+          );
+          rejectedCandidates.push({
+            heading: Number(heading.toFixed(3)),
+            scale,
+            x: Number(x.toFixed(2)),
+            z: Number(z.toFixed(2)),
+            blockedBy: blocker?.number ?? null,
+            distance: blocker
+              ? Number(Math.hypot(candidate.x - blocker.x, candidate.z - blocker.z).toFixed(2))
+              : null
+          });
+        }
+      }
+      return null;
+    };
+
+    let chosen = findCandidate(preferredHeading, turnPoint?.length ?? 2.86);
+    let usedTurnStep = Boolean(turnPoint && chosen);
+    if (!chosen && turnPoint) {
+      chosen = findCandidate(normalHeading, 2.86);
+    }
+
+    if (!chosen) {
+      throw new Error(
+        '潮汐远征布点失败: 第 ' + (platforms.length + 1) + ' 台 / 第 ' + (stage + 1) + ' 段 ' +
+        JSON.stringify({
+          pose: { x: pose.x, z: pose.z, top: pose.top, heading: pose.heading },
+          laneDirection,
+          laneRun,
+          turnArc,
+          rejectedCandidates: rejectedCandidates.slice(0, 12),
+          recent: platforms.slice(-6).map((platform) => ({
+            number: platform.number,
+            x: platform.x,
+            z: platform.z,
+            top: platform.top,
+            half: platform.half,
+            motion: platform.motion?.type || null
+          })),
+          nearby: platforms
+            .filter((platform) => Math.hypot(platform.x - pose.x, platform.z - pose.z) < 9)
+            .map((platform) => ({
+              number: platform.number,
+              x: platform.x,
+              z: platform.z,
+              top: platform.top,
+              half: platform.half,
+              motion: platform.motion?.type || null,
+              rotorGroup: platform.rotorGroup || null
+            }))
+        })
+      );
+    }
+
+    pose.x = chosen.x;
+    pose.z = chosen.z;
+    pose.top = chosen.top;
+    pose.heading = chosen.heading;
+
+    if (turnArc && usedTurnStep) {
+      turnIndex++;
+      if (turnIndex >= turnArc.length) {
+        turnArc = null;
+        turnIndex = 0;
+        laneDirection *= -1;
+        laneRun = chooseLaneRun(stage);
+      }
+    } else if (turnArc) {
+      turnArc = null;
+      turnIndex = 0;
+      laneRun = chooseLaneRun(stage);
+    } else {
+      laneRun--;
+      if (laneRun <= 0 && !canTurnAtNextPlatform()) {
+        laneRun = 2;
+      }
+    }
+    if (forcedSteps > 0) {
+      forcedSteps--;
+      if (forcedSteps === 0) {
+        forcedHeading = null;
+        exitRotorGroup = null;
+      }
+    }
+    if (ignoreTailCount > 1) ignoreTailCount--;
+  };
+
+  const addPlatform = (stage, x, z, top, extra = {}) => {
+    const number = platforms.length + 1;
+    const plan = planAt(stage);
     const theme = themeNames[stage % themeNames.length];
     const texture = themes[theme];
-    const previous = platforms[platforms.length - 1];
     const isReward = number % OCEAN_REWARD_INTERVAL === 0;
-    let top = Math.max(0.38, Math.min(1.72,
-      1.28 - progress * 0.58 + Math.sin(number * 0.17 + stage * 0.6) * 0.22
-    ));
-    if (previous) top = Math.max(previous.top - 0.46, Math.min(previous.top + 0.46, top));
-
-    const tangentLength = Math.hypot(point.dx, point.dz) || 1;
-    const sideX = -point.dz / tangentLength;
-    const sideZ = point.dx / tangentLength;
-    const prop = props[(stage * 3 + step) % props.length];
+    const previous = platforms[platforms.length - 1];
+    const routeYaw = previous
+      ? Math.atan2(z - previous.z, x - previous.x)
+      : pose.heading;
     const p = {
       id: 'ocean-' + number,
       number,
       stage: stage + 1,
-      stageName: stageNames[stage],
+      stageName: plan.name,
+      stageMechanic: plan.kind,
       theme,
-      prop,
+      prop: extra.prop,
       deckColor: texture.deck,
       trimColor: isReward ? 0xffca62 : texture.trim,
-      x: point.x,
-      z: point.z,
+      x,
+      z,
       top,
-      half: isReward ? 1.02 : Math.max(0.44, 0.62 - progress * 0.1 + (step % 3) * 0.025)
+      half: isReward ? 1.02 : Math.max(0.37, extra.half ?? 0.5),
+      routeYaw
     };
 
-    if (!isReward) {
-      const pattern = stage % 10;
-      if (pattern === 1 || pattern === 8) {
-        p.motion = {
-          type: 'shuttle',
-          x0: point.x,
-          z0: point.z,
-          axisX: sideX,
-          axisZ: sideZ,
-          amplitude: 0.32,
-          speed: 0.72 + (step % 3) * 0.07,
-          phase: step * 0.8
-        };
-      } else if (pattern === 2) {
-        p.motion = {
-          type: 'lift',
-          baseTop: top,
-          amplitude: 0.16,
-          speed: 0.9 + (step % 4) * 0.08,
-          phase: step * 1.2
-        };
-      } else if (pattern === 3 || pattern === 5) {
-        p.motion = {
-          type: 'orbit',
-          cx: point.x,
-          cz: point.z,
-          radius: 0.16 + (step % 3) * 0.02,
-          speed: (pattern === 5 ? -1 : 1) * (0.38 + (stage % 3) * 0.05),
-          phase: step * 1.7
-        };
-        if (!rotors.some((rotor) => rotor.stage === stage)) {
-          rotors.push({
-            stage,
-            x: point.x,
-            z: point.z,
-            radius: 0.42,
-            minTop: top - 0.16,
-            maxTop: top + 0.24,
-            speed: p.motion.speed,
-            phase: 0
-          });
-        }
-      } else if (pattern === 4 || pattern === 6 || pattern === 9) {
-        p.motion = {
-          type: 'wave',
-          x0: point.x,
-          z0: point.z,
-          baseTop: top,
-          amplitudeX: sideX * 0.22,
-          amplitudeZ: sideZ * 0.22,
-          amplitudeY: 0.09,
-          speed: 0.9 + (step % 4) * 0.06,
-          phase: step * 0.95
-        };
-      }
+    if (previous) previous.routeYaw = routeYaw;
+    if (extra.rotorGroup) {
+      p.rotorGroup = extra.rotorGroup;
+      p.rotorCenter = extra.rotorCenter;
+      p.rotorRadius = extra.rotorRadius;
     }
+    if (extra.mechanic) p.mechanic = extra.mechanic;
+    if (!isReward && extra.motion) p.motion = extra.motion;
 
     if (isReward) {
       p.reward = {
         id: 'ocean-stage-' + (stage + 1),
         stage: stage + 1,
-        stageName: stageNames[stage],
+        stageName: plan.name,
         points: 180 + (stage + 1) * 45,
         final: number === OCEAN_PLATFORM_TOTAL
       };
@@ -511,16 +857,342 @@ function makeOceanCurrentCourse() {
       delete p.motion;
     }
 
-    if (previous) {
-      previous.routeYaw = Math.atan2(point.z - previous.z, point.x - previous.x);
-    }
-    p.routeYaw = previous?.routeYaw || 0;
     platforms.push(p);
-    t = advanceAlongCurve(point, t);
+    return p;
+  };
+
+  const motionFor = (type, p, stage, step) => {
+    const tangentX = Math.cos(pose.heading);
+    const tangentZ = Math.sin(pose.heading);
+    const sideX = -tangentZ;
+    const sideZ = tangentX;
+    const direction = step % 2 === 0 ? 1 : -1;
+
+    if (type === 'lift') {
+      return {
+        type,
+        baseTop: p.top,
+        amplitude: 0.13 + (step % 3) * 0.045,
+        speed: 0.88 + (stage % 5) * 0.055,
+        phase: step * 1.17 + stage * 0.6
+      };
+    }
+    if (type === 'shuttle') {
+      const flow = planAt(stage).kind === 'tram' || planAt(stage).kind === 'leviathan';
+      const axisX = flow ? tangentX : sideX;
+      const axisZ = flow ? tangentZ : sideZ;
+      return {
+        type,
+        x0: p.x,
+        z0: p.z,
+        axisX,
+        axisZ,
+        amplitude: flow ? 0.62 : 0.5 + (step % 3) * 0.06,
+        speed: 0.72 + (stage % 4) * 0.06,
+        phase: step * 0.82 + stage * 0.45
+      };
+    }
+    if (type === 'wave') {
+      const amplitude = 0.22 + (step % 3) * 0.045;
+      return {
+        type,
+        x0: p.x,
+        z0: p.z,
+        baseTop: p.top,
+        amplitudeX: sideX * amplitude,
+        amplitudeZ: sideZ * amplitude,
+        amplitudeY: 0.08 + (step % 2) * 0.035,
+        speed: 0.86 + (stage % 5) * 0.055,
+        phase: step * 0.93 + stage * 0.4
+      };
+    }
+    return {
+      type: 'orbit',
+      cx: p.x,
+      cz: p.z,
+      radius: 0.58 + (step % 3) * 0.07,
+      speed: direction * (0.42 + (stage % 4) * 0.055),
+      phase: step * 1.31 + stage * 0.5
+    };
+  };
+
+  const placeBase = (stage, step, extra = {}) => {
+    const plan = planAt(stage);
+    const half = extra.half ?? plan.half[step % plan.half.length] ?? 0.5;
+    if (!firstPlatform) {
+      advanceBase(stage, step, {
+        half,
+        motionType: extra.motionType,
+        rotorGroup: extra.rotorGroup,
+        rotorCenter: extra.rotorCenter,
+        rotorRadius: extra.rotorRadius
+      });
+    }
+    firstPlatform = false;
+    const mechanic = extra.mechanic || plan.kind;
+    const p = addPlatform(stage, pose.x, pose.z, pose.top, {
+      half,
+      mechanic,
+      prop: extra.prop ?? plan.props[step % plan.props.length],
+      rotorGroup: extra.rotorGroup,
+      rotorCenter: extra.rotorCenter,
+      rotorRadius: extra.rotorRadius
+    });
+    if (!p.reward && extra.motionType) {
+      p.motion = motionFor(extra.motionType, p, stage, step);
+    }
+    return p;
+  };
+
+  const regularPattern = (stage, step) => {
+    const kind = planAt(stage).kind;
+    if (kind === 'weave') return ['static', 'wave', 'static', 'shuttle'][step % 4];
+    if (kind === 'slalom') return step % 4 === 3 ? 'static' : 'shuttle';
+    if (kind === 'switchback') return step % 5 === 4 ? 'lift' : 'static';
+    if (kind === 'ribs') return ['static', 'lift', 'wave'][step % 3];
+    if (kind === 'carousel') return ['orbit', 'wave'][step % 2];
+    if (kind === 'lifts') return step % 4 === 3 ? 'static' : 'lift';
+    if (kind === 'drift') return step % 5 === 4 ? 'static' : 'wave';
+    if (kind === 'shells') return step % 6 === 5 ? 'lift' : 'static';
+    if (kind === 'crosswind') return step % 5 === 4 ? 'static' : 'wave';
+    if (kind === 'tram') return step % 4 === 3 ? 'static' : 'shuttle';
+    if (kind === 'bluehole') return ['orbit', 'wave', 'lift'][step % 3];
+    if (kind === 'rhythm') return ['lift', 'lift', 'wave', 'static', 'lift'][step % 5];
+    if (kind === 'rapids') return ['shuttle', 'static', 'wave', 'static'][step % 4];
+    if (kind === 'leviathan') return step % 4 === 3 ? 'static' : 'shuttle';
+    if (kind === 'moons') return ['orbit', 'orbit', 'wave'][step % 3];
+    if (kind === 'maze') return step % 5 === 4 ? 'lift' : 'static';
+    if (kind === 'eye') return ['orbit', 'lift', 'wave', 'static'][step % 4];
+    if (kind === 'riptide') return ['shuttle', 'static', 'lift', 'shuttle'][step % 4];
+    if (kind === 'gates') return ['lift', 'wave', 'wave', 'lift', 'static'][step % 5];
+    return ['static', 'orbit', 'wave', 'lift', 'static', 'shuttle'][step % 6];
+  };
+
+  const appendRegular = (stage, count, offset = 0) => {
+    for (let i = 0; i < count; i++) {
+      const step = offset + i;
+      const motionType = regularPattern(stage, step);
+      placeBase(stage, step, {
+        motionType: motionType === 'static' ? null : motionType,
+        half: planAt(stage).half[step % planAt(stage).half.length]
+      });
+    }
+  };
+
+  const appendRotorCluster = (stage, armCount, radius, reverse = false) => {
+    const entryDistance = 2.86;
+    const exitDistance = 2.86;
+    const direction = reverse ? -1 : 1;
+    const rotorGroup = 'ocean-rotor-' + (stage + 1) + '-' + rotors.length;
+    const routeHeading = -Math.PI / 2 + Math.sin(stage * 1.31 + rotors.length * 0.83) * 0.42;
+    const headingOffsets = [
+      0, 0.24, -0.24, 0.5, -0.5, 0.82, -0.82, 1.08, -1.08,
+      1.4, -1.4, 1.75, -1.75, 2.1, -2.1, 2.45, -2.45, 2.8, -2.8, 3.14
+    ];
+    const radiusScales = [1, 0.9, 1.1, 0.82, 1.18, 0.74, 1.26];
+    const phaseOffsets = [0, 0.34, -0.34, 0.68, -0.68];
+    let layout = null;
+
+    for (const headingOffset of headingOffsets) {
+      const heading = routeHeading + headingOffset;
+      const dirX = Math.cos(heading);
+      const dirZ = Math.sin(heading);
+      for (const radiusScale of radiusScales) {
+        const ringRadius = radius * radiusScale;
+        const cx = pose.x + dirX * (entryDistance + ringRadius);
+        const cz = pose.z + dirZ * (entryDistance + ringRadius);
+        const speed = direction * (0.38 + (stage % 4) * 0.04);
+
+        for (const phaseOffset of phaseOffsets) {
+          const startAngle = heading + Math.PI + phaseOffset;
+          const arms = [];
+          for (let arm = 0; arm < armCount; arm++) {
+            const angle = startAngle + direction * arm * Math.PI * 2 / armCount;
+            const x = cx + Math.cos(angle) * ringRadius;
+            const z = cz + Math.sin(angle) * ringRadius;
+            const top = pose.top + (arm % 2 === 0 ? -0.06 : 0.16);
+            const motion = {
+              type: 'orbit',
+              cx,
+              cz,
+              radius: ringRadius,
+              speed,
+              phase: angle
+            };
+            const candidate = baseCandidate(stage, 0, x, z, top, {
+              half: 0.48,
+              motion,
+              rotorGroup,
+              rotorCenter: { x: cx, z: cz },
+              rotorRadius: ringRadius
+            });
+            arms.push({ angle, x, z, top, motion, candidate });
+          }
+
+          const last = arms[arms.length - 1];
+          const outX = (last.x - cx) / ringRadius;
+          const outZ = (last.z - cz) / ringRadius;
+          const exit = {
+            x: last.x + outX * exitDistance,
+            z: last.z + outZ * exitDistance,
+            top: last.top + 0.18
+          };
+          if (exit.z > pose.z - 1.8) continue;
+          const exitCandidate = baseCandidate(stage, 0, exit.x, exit.z, exit.top, { half: 0.6 });
+
+          const inBounds = [...arms.map((arm) => arm.candidate), exitCandidate].every((candidate) => {
+            const bounds = horizontalBounds(candidate);
+            return (
+              bounds.minX >= OCEAN_MIN_X &&
+              bounds.maxX <= OCEAN_MAX_X &&
+              bounds.maxZ <= 12 &&
+              bounds.minZ >= OCEAN_MIN_Z
+            );
+          });
+          if (!inBounds) continue;
+
+          const armsClear = arms.every((arm) =>
+            !candidateConflicts(arm.candidate, {
+              ignoreRecent: 1,
+              ignoreSameRotor: true
+            })
+          );
+          if (!armsClear) continue;
+          if (candidateConflicts(exitCandidate, { ignoreRecent: 1 })) continue;
+
+          const exitClear = arms.every((arm, index) => {
+            const distance = Math.hypot(exit.x - arm.x, exit.z - arm.z);
+            return index === arms.length - 1 || distance > 3.05;
+          });
+          if (!exitClear) continue;
+
+          layout = {
+            cx,
+            cz,
+            ringRadius,
+            speed,
+            arms,
+            exit,
+            exitCandidate
+          };
+          break;
+        }
+        if (layout) break;
+      }
+      if (layout) break;
+    }
+
+    if (!layout) {
+      throw new Error(
+        '潮汐远征旋转区布点失败: 第 ' + (stage + 1) + ' 段 ' +
+        JSON.stringify({
+          pose: { x: pose.x, z: pose.z, top: pose.top, heading: pose.heading },
+          armCount,
+          radius,
+          recent: platforms.slice(-10).map((platform) => ({
+            number: platform.number,
+            x: platform.x,
+            z: platform.z,
+            top: platform.top,
+            half: platform.half,
+            motion: platform.motion?.type || null
+          }))
+        })
+      );
+    }
+
+    let lastX = pose.x;
+    let lastZ = pose.z;
+    for (const arm of layout.arms) {
+      addPlatform(stage, arm.x, arm.z, arm.top, {
+        half: 0.48,
+        mechanic: 'rotor',
+        motion: arm.motion,
+        rotorGroup,
+        rotorCenter: { x: layout.cx, z: layout.cz },
+        rotorRadius: layout.ringRadius
+      });
+      lastX = arm.x;
+      lastZ = arm.z;
+    }
+    addPlatform(stage, layout.exit.x, layout.exit.z, layout.exit.top, {
+      half: 0.6,
+      mechanic: 'rotor-exit',
+      prop: 'gate'
+    });
+
+    rotors.push({
+      stage,
+      x: layout.cx,
+      z: layout.cz,
+      radius: layout.ringRadius,
+      minTop: Math.min(...layout.arms.map((arm) => arm.top)) - 0.18,
+      maxTop: Math.max(...layout.arms.map((arm) => arm.top), layout.exit.top) + 0.2,
+      speed: layout.speed,
+      phase: layout.arms[0].angle
+    });
+
+    pose.x = layout.exit.x;
+    pose.z = layout.exit.z;
+    pose.top = layout.exit.top;
+    const outHeading = Math.atan2(layout.exit.z - layout.cz, layout.exit.x - layout.cx);
+    laneDirection = Math.cos(outHeading) >= 0 ? 1 : -1;
+    pose.heading = outHeading;
+    forcedHeading = outHeading;
+    forcedSteps = 2;
+    exitRotorGroup = rotorGroup;
+    firstPlatform = false;
+    turnArc = null;
+    turnIndex = 0;
+    laneRun = chooseLaneRun(stage);
+    ignoreTailCount = armCount + 7;
+  };
+
+  const appendStage = (stage) => {
+    const kind = planAt(stage).kind;
+    if (kind === 'carousel') {
+      appendRotorCluster(stage, 6, 2.65, false);
+      appendRegular(stage, 17, 7);
+    } else if (kind === 'bluehole') {
+      appendRotorCluster(stage, 8, 3.75, false);
+      appendRegular(stage, 15, 9);
+    } else if (kind === 'moons') {
+      appendRotorCluster(stage, 8, 3.4, false);
+      appendRegular(stage, 15, 9);
+    } else if (kind === 'eye') {
+      appendRotorCluster(stage, 5, 2.5, true);
+      appendRegular(stage, 18, 6);
+    } else if (kind === 'heart') {
+      appendRotorCluster(stage, 8, 3.75, true);
+      appendRegular(stage, 15, 9);
+    } else {
+      appendRegular(stage, 24);
+    }
+  };
+
+  for (let stage = 0; stage < stagePlans.length; stage++) {
+    if (platforms.length !== stage * OCEAN_REWARD_INTERVAL) {
+      throw new Error('潮汐远征分段起点错误: 第 ' + (stage + 1) + ' 段, ' + platforms.length);
+    }
+    appendStage(stage);
+    if (platforms.length !== stage * OCEAN_REWARD_INTERVAL + 24) {
+      throw new Error('潮汐远征挑战台数量错误: 第 ' + (stage + 1) + ' 段, ' + platforms.length);
+    }
+    placeBase(stage, 24, {
+      half: 1.02,
+      mechanic: 'reward',
+      prop: 'gate',
+      motionType: null
+    });
   }
 
   if (platforms.length !== OCEAN_PLATFORM_TOTAL) {
     throw new Error('潮汐远征平台数错误: ' + platforms.length + ', 预期 ' + OCEAN_PLATFORM_TOTAL);
+  }
+  for (let number = OCEAN_REWARD_INTERVAL; number <= OCEAN_PLATFORM_TOTAL; number += OCEAN_REWARD_INTERVAL) {
+    if (!platforms[number - 1]?.reward) {
+      throw new Error('潮汐远征宝箱位置错误: ' + number);
+    }
   }
   return { platforms, rotors };
 }
@@ -692,22 +1364,21 @@ const COMET_COURSE_DATA = makeCometCourse();
 const COMET_LAST_PLATFORM = COMET_COURSE_DATA.platforms[COMET_COURSE_DATA.platforms.length - 1];
 
 /* ================= 关卡注册表 =================
- * 新增关卡：往 COURSES 里加一个对象即可——碰撞、落地、计时、榜单、宝箱全部自动接入。
+ * 新增关卡：往 COURSES 里加一个对象即可——碰撞、落地、奖励和交互自动接入。
  *
  * 字段说明：
- *   id        唯一标识（计时器与榜单存档键 wb-board-<id> 使用）
+ *   id        唯一标识
  *   name      显示名称（通关提示用）
  *   style     视觉样式：'sea'  = 桩柱浮台（放在海面）
  *                       'float'= 悬空台（陆地/高空，三种台面样式轮换）
  *                       'sky'  = 500 阶登天云梯（含动态台、阶段宝箱与检查点）
- *                       'ocean'= 500 阶潮汐远征（蛇形海路、动态台与阶段宝箱）
+ *                       'ocean'= 500 阶潮汐远征（宽幅折返、旋转阵列与阶段宝箱）
  *                       'comet'= 500 阶星跃追光（有限冲刺、充能台与阶段宝箱）
- *   platforms 平台数组 [{x, z, top, half, prop?}]；platforms[0] 为起点台（踩上即开始计时）
+ *   platforms 平台数组 [{x, z, top, half, prop?}]；platforms[0] 为起点台
  *             motion:{type:'orbit'|'lift'|'shuttle'|'wave'} 可让平台沿轨道/高度/横向/波浪运动
  *             reward 标记宝箱平台，打开后奖励积分并自动成为关卡检查点
  *             prop:'palm' 表示该平台用棕榈树冠跳台替代木台
- *   goal      终点 {x, z, top, half}（靠近宝箱即通关、计时结束并上榜）
- *   board     榜牌 {x, z, rot}（rot 弧度，面向来路）；省略则该关卡无榜牌
+ *   goal      终点 {x, z, top, half}（靠近宝箱即通关）
  *
  * 布点约束：相邻平台中心距 ≥2.8（台宽 1.4，防重叠）且 ≤3.2（间隙 ≤1.8，步行跳可过）；
  * 每级升幅 ≤0.65；终点 half>2 时自动使用金边观景台样式。 */
@@ -745,8 +1416,7 @@ export const COURSES = [
       // 终点宝箱岛
       { x: -16.2, z: -53.2, top: 1.78, half: 2.4 }
     ],
-    goal: { x: -16.2, z: -53.2, top: 1.78, half: 2.4 },
-    board: { x: -10.5, z: 0.2, rot: -2.18 }
+    goal: { x: -16.2, z: -53.2, top: 1.78, half: 2.4 }
   },
   {
     id: 'height',
@@ -773,8 +1443,7 @@ export const COURSES = [
       platforms.push({ x: HOUSE.x, z: HOUSE.z, top: topN, half: 2.6 }); // 终点观景平台（不算台阶）
       return platforms;
     })(),
-    goal: { x: HOUSE.x, z: HOUSE.z, top: 12.2, half: 2.6 },
-    board: { x: 32.5, z: 0.6, rot: 0.75 }
+    goal: { x: HOUSE.x, z: HOUSE.z, top: 12.2, half: 2.6 }
   },
   {
     id: 'sky',
@@ -789,8 +1458,7 @@ export const COURSES = [
       half: SKY_LAST_PLATFORM.half,
       rewardId: SKY_LAST_PLATFORM.reward.id,
       points: SKY_LAST_PLATFORM.reward.points
-    },
-    board: { x: 34.0, z: 32.2, rot: 0.4 }
+    }
   },
   {
     id: 'ocean',
@@ -805,8 +1473,7 @@ export const COURSES = [
       half: OCEAN_LAST_PLATFORM.half,
       rewardId: OCEAN_LAST_PLATFORM.reward.id,
       points: OCEAN_LAST_PLATFORM.reward.points
-    },
-    board: { x: 56.0, z: 4.0, rot: -0.6 }
+    }
   },
   {
     id: 'comet',
@@ -821,8 +1488,7 @@ export const COURSES = [
       half: COMET_LAST_PLATFORM.half,
       rewardId: COMET_LAST_PLATFORM.reward.id,
       points: COMET_LAST_PLATFORM.reward.points
-    },
-    board: { x: -39.2, z: 13.0, rot: -0.2 }
+    }
   }
 ];
 
@@ -1817,62 +2483,6 @@ function makeLantern(x, y, z) {
   cap.position.y = y + 1.18;
   g.add(cap);
   return g;
-}
-
-/* ---------------- 跳高关卡榜牌（Canvas 贴图，前三名成绩） ---------------- */
-
-function makeLeaderboardSign(x, z) {
-  const g = new THREE.Group();
-  const post = box(0.16, 2.3, 0.16, PALETTE.woodDark);
-  post.position.y = 1.15;
-  g.add(post);
-  const board = box(2.3, 1.5, 0.1, PALETTE.woodDark);
-  board.position.y = 2.35;
-  g.add(board);
-
-  const cv = document.createElement('canvas');
-  cv.width = 320;
-  cv.height = 208;
-  const tex = new THREE.CanvasTexture(cv);
-  tex.colorSpace = THREE.SRGBColorSpace;
-  const faceGeo = new THREE.PlaneGeometry(2.14, 1.36);
-  const face = new THREE.Mesh(faceGeo, new THREE.MeshBasicMaterial({ map: tex }));
-  face.position.set(0, 2.35, -0.061);
-  g.add(face);
-  // 背面同贴图（旋转 π 保证文字不镜像），两面都可读
-  const face2 = new THREE.Mesh(faceGeo, new THREE.MeshBasicMaterial({ map: tex }));
-  face2.position.set(0, 2.35, 0.061);
-  face2.rotation.y = Math.PI;
-  g.add(face2);
-
-  function draw(records) {
-    const ctx = cv.getContext('2d');
-    ctx.fillStyle = '#2b2318';
-    ctx.fillRect(0, 0, 320, 208);
-    ctx.strokeStyle = '#d8b04a';
-    ctx.lineWidth = 6;
-    ctx.strokeRect(4, 4, 312, 200);
-    ctx.fillStyle = '#f0b848';
-    ctx.font = 'bold 34px "Microsoft YaHei", sans-serif';
-    ctx.textAlign = 'center';
-    ctx.fillText('跳高挑战榜', 160, 52);
-    ctx.textAlign = 'left';
-    ctx.font = '30px "Microsoft YaHei", sans-serif';
-    const ranks = ['①', '②', '③'];
-    const colors = ['#ffd76a', '#cfd6dd', '#e2a06a'];
-    for (let i = 0; i < 3; i++) {
-      const y = 104 + i * 44;
-      ctx.fillStyle = colors[i];
-      ctx.fillText(ranks[i], 44, y);
-      ctx.fillStyle = '#f2f3f5';
-      ctx.fillText(records[i] != null ? records[i].toFixed(2) + ' s' : '— —', 100, y);
-    }
-    tex.needsUpdate = true;
-  }
-  draw([]);
-
-  g.position.set(x, terrainHeight(x, z), z);
-  return { group: g, draw };
 }
 
 /* ---------------- 水波涟漪 ---------------- */
@@ -3134,9 +3744,8 @@ export function buildBeachScene(options = {}) {
     scene.add(gull);
   }
 
-  /* ---- 关卡（注册表驱动：碰撞/计时/榜单全自动接入） ---- */
+  /* ---- 关卡（注册表驱动：碰撞/奖励/检查点自动接入） ---- */
   const courseVisuals = {};
-  const boardDrawers = {};
   let activeView = 'sky';
   const collectedRewardIds = options.collectedRewardIds || {};
   const highestStages = options.highestStages || {};
@@ -3155,12 +3764,6 @@ export function buildBeachScene(options = {}) {
       for (const reward of vis.rewards) {
         if (collected?.has(reward.id)) vis.setRewardOpened(reward.id, false);
       }
-    }
-    if (def.board) {
-      const b = makeLeaderboardSign(def.board.x, def.board.z);
-      b.group.rotation.y = def.board.rot;
-      scene.add(b.group);
-      boardDrawers[def.id] = b.draw;
     }
   }
 
@@ -3255,7 +3858,6 @@ export function buildBeachScene(options = {}) {
       }
       return null;
     },
-    setBoard(id, records) { boardDrawers[id]?.(records); },
     update(t, dt = 0.016, player = null) {
       updateMovingPlatforms(t, activeView);
       carryRider(player, activeView);
