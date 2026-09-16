@@ -291,36 +291,37 @@ function startTrainingTimer(courseId) {
 
 function updateTrainingTimer() {
   if (!state.timer.running) return;
-  const support = state.player?.supportPlatform;
-  if (support?.courseId === state.timer.course) {
+  const player = state.player;
+  if (!player) return;
+  const courseId = state.timer.course;
+  const support = player.supportPlatform;
+  if (support?.courseId === courseId) {
+    // 仍然站在本轮训练关的台面上：继续计时
     state.timer.platform = support;
-  } else {
-    const lastPlatform = state.timer.platform;
-    const fallClearance = state.timer.course === 'sea' ? 0.28 : 0.72;
-    const fellBelowPlatform =
-      lastPlatform &&
-      state.player.vy < 0.2 &&
-      state.player.pos.y < lastPlatform.top - fallClearance;
-    const enteredWater = state.timer.course === 'sea' && state.player.pos.y <= WATER_LEVEL + 0.04;
-    const landedOffCourse = state.player.onGround && support?.courseId !== state.timer.course;
-    if (fellBelowPlatform || enteredWater || landedOffCourse) {
-      const courseId = state.timer.course;
-      const elapsed = stopTrainingTimer();
-      const course = COURSE_BY_ID.get(courseId);
-      if (elapsed != null) {
-        const landedOnTerrain =
-          courseId === 'height' &&
-          state.player.onGround &&
-          Math.abs(state.player.pos.y - terrainHeight(state.player.pos.x, state.player.pos.z)) < 0.15;
-        showHint(
-          landedOnTerrain
-            ? '落回地面，本次环屋计时已取消'
-            : '已离开「' + (course?.name || '训练关卡') + '」台阶 · 用时 ' + elapsed.toFixed(2) + ' 秒',
-          2600
-        );
-      }
-      return;
+  } else if (courseId === 'sea' && player.pos.y <= WATER_LEVEL + 0.04) {
+    // 落水：回到远征起点并把本轮计时清零重启。此前这里只是停表 + 强制
+    // onStart 标记，导致回到起点台后计时再也起不来（看起来像“无缘无故停了”）。
+    respawnAtSeaStart();
+    showHint('落水，「' + (COURSE_BY_ID.get(courseId)?.name || '训练关卡') + '」计时已重置', 2200);
+    return;
+  } else if (player.onGround && player.vy >= -0.01) {
+    // 只有“真正站住了”却不在本关台面上才算离开路线（着地时 vy 会被清零，
+    // 走下台沿/下落中 vy < 0）。旧实现只看 onGround，而 player.js 走过台沿
+    // 时 onGround 不会立刻清零，于是刚起跳/刚下台阶就会被误判成“离开台阶”。
+    const elapsed = stopTrainingTimer();
+    const course = COURSE_BY_ID.get(courseId);
+    if (elapsed != null) {
+      const landedOnTerrain =
+        player.onGround &&
+        Math.abs(player.pos.y - terrainHeight(player.pos.x, player.pos.z)) < 0.15;
+      showHint(
+        courseId === 'height' && landedOnTerrain
+          ? '落回地面，本次环屋计时已取消'
+          : '已离开「' + (course?.name || '训练关卡') + '」台阶 · 用时 ' + elapsed.toFixed(2) + ' 秒',
+        2600
+      );
     }
+    return;
   }
   state.timer.elapsed = Math.max(0, (performance.now() - state.timer.start) / 1000);
   timerEl.textContent = state.timer.elapsed.toFixed(2) + ' 秒';
@@ -695,15 +696,22 @@ function respawnAtCheckpoint(courseId = state.activeCourse, hintMessage = null) 
 }
 
 function respawnAtSeaStart() {
-  stopTrainingTimer();
+  // 落水/重置：若本轮深海计时正在跑，回到起点台后立即从 0 重新计时，
+  // 而不是把表停死（旧实现强制 onStart.sea = true，导致起点检测再也不触发）。
+  const restartTiming = state.timer.running && state.timer.course === 'sea';
   const sea = COURSE_BY_ID.get('sea');
   const start = sea.platforms[0];
-  state.player.respawn({ x: start.x, y: start.top, z: start.z });
+  state.player.respawn({ x: start.x, y: start.top + 0.02, z: start.z });
   state.player.group.position.copy(state.player.pos);
   state.rig.initialized = false;
+  state.run.currentCourse = 'sea';
   state.run.onStart.sea = true;
   state.beach.spawnRipple(start.x, start.z);
   splashSfx();
+  if (restartTiming) {
+    startTrainingTimer('sea');
+    state.timer.platform = start; // 立刻以起点台作为“是否离开路线”的比较基准
+  }
 }
 
 function collectReward(reward) {
@@ -827,24 +835,29 @@ function frame(now) {
     // 关卡起跑检测：记录玩家当前进入的路线，用于独立的落水与坠落救援。
     const tp = state.player.pos;
     for (const { course: c, start: s } of COURSE_STARTS) {
-      const on = Math.abs(tp.x - s.x) < s.half + 0.05 && Math.abs(tp.z - s.z) < s.half + 0.05 && Math.abs(tp.y - s.top) < 0.25;
+      const isLongCourse = SAVE_COURSE_IDS.includes(c.id);
+      // 训练关起点必须“真正踩在起点台面上”才算进入：
+      // 旧实现只看几何范围（水平 ±(half+0.05)、高度 ±0.25），玩家站在低矮起点台
+      // 旁边的沙地上就会误触发，随后立刻被判成“已离开台阶”，计时刚亮就灭且无法再启动。
+      const on = isLongCourse
+        ? Math.abs(tp.x - s.x) < s.half + 0.05 && Math.abs(tp.z - s.z) < s.half + 0.05 && Math.abs(tp.y - s.top) < 0.25
+        : state.player.supportPlatform === s;
       if (on && !state.run.onStart[c.id]) {
-        const isLongCourse = SAVE_COURSE_IDS.includes(c.id);
-        if (isLongCourse && state.activeCourse === 'free') {
-          // 自由模式隐藏长关；即使测试直接移动玩家，也不得改动长关状态。
+        if (isLongCourse) {
+          if (state.activeCourse !== 'free') {
+            // 自由模式隐藏长关；即使测试直接移动玩家，也不得改动长关状态。
+            stopTrainingTimer();
+            state.run.currentCourse = c.id;
+            state.activeCourse = c.id;
+            state.score.lastCourse = c.id;
+            state.run.checkpoint = state.run.checkpoints[c.id] || s;
+            state.beach.setViewMode(c.id);
+            hudSubEl.textContent = c.name + ' · 500 阶';
+            updateScoreUI(false);
+            updateCourseSwitchButton();
+          }
         } else {
           state.run.currentCourse = c.id;
-        }
-        if (isLongCourse && state.activeCourse !== 'free') {
-          stopTrainingTimer();
-          state.activeCourse = c.id;
-          state.score.lastCourse = c.id;
-          state.run.checkpoint = state.run.checkpoints[c.id] || s;
-          state.beach.setViewMode(c.id);
-          hudSubEl.textContent = c.name + ' · 500 阶';
-          updateScoreUI(false);
-          updateCourseSwitchButton();
-        } else if (TRAINING_COURSE_IDS.includes(c.id)) {
           startTrainingTimer(c.id);
         }
       }
@@ -860,7 +873,7 @@ function frame(now) {
       splashSfx();
       respawnAtCheckpoint('comet');
     } else if (runCourse === 'sea' && tp.y < WATER_LEVEL - 0.05 && tp.z < -3.2) {
-      stopTrainingTimer();
+      // 计时是否归零重启由 respawnAtSeaStart 内部按“本轮是否在计时”决定
       respawnAtSeaStart();
       showHint('落水，本次深海训练已重置', 2200);
     } else if (
@@ -919,9 +932,15 @@ function frame(now) {
       : STATIC_COURSE_GOAL_IDS;
     for (const courseId of goalIds) {
       const goal = state.beach.goals[courseId];
-      if (!goal || goal.opened) continue;
+      if (!goal) continue;
       const p = state.player.pos;
-      if (Math.hypot(p.x - goal.x, p.z - goal.z) < goal.half * 0.75 + 0.2 && Math.abs(p.y - goal.y) < 1.0) {
+      const goalDistance = Math.hypot(p.x - goal.x, p.z - goal.z);
+      if (TRAINING_COURSE_IDS.includes(courseId) && goal.opened && goalDistance > goal.half + 1.5) {
+        // 训练关可以反复挑战：离开终点后重新武装，否则第二次跑完全程不会结算用时
+        goal.opened = false;
+      }
+      if (goal.opened) continue;
+      if (goalDistance < goal.half * 0.75 + 0.2 && Math.abs(p.y - goal.y) < 1.0) {
         goal.opened = true;
         state.beach.courseVisual(courseId).spawnConfetti();
         goalSfx();
