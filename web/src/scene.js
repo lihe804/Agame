@@ -3878,13 +3878,30 @@ function makeCourseVisual(def) {
     g.add(pg);
   }
 
-  // 终点：终极大奖（惊喜礼盒 → 金色大奖）+ 旗子 + 彩带池
+  // 终点：宝箱（盖可开）+ 旗子 + 彩带池（终极大奖只属于三个长关，练习关不放大奖）
   const goal = def.goal;
-  const grandPrize = makeGrandPrize(def, goal);
-  g.add(grandPrize.group);
-  const lidPivot = grandPrize.lidPivot;
+  const chest = new THREE.Group();
+  const chestBody = box(0.9, 0.5, 0.62, PALETTE.woodDark);
+  chestBody.position.y = 0.25;
+  chest.add(chestBody);
+  const lidPivot = new THREE.Group();
+  lidPivot.userData.animated = true;
+  lidPivot.position.set(0, 0.5, -0.31);
+  const lid = box(0.9, 0.16, 0.62, PALETTE.wood);
+  lid.position.set(0, 0.08, 0.31);
+  lidPivot.add(lid);
+  chest.add(lidPivot);
+  const lock = new THREE.Mesh(
+    new THREE.SphereGeometry(0.05, 8, 6),
+    new THREE.MeshStandardMaterial({ color: 0xd8b04a, roughness: 0.3, metalness: 0.7 })
+  );
+  lock.position.set(0, 0.52, 0.33);
+  chest.add(lock);
+  chest.position.set(goal.x, goal.top, goal.z);
+  chest.rotation.y = 0.55;
+  g.add(chest);
 
-  const fo = goal.half * 0.62;
+  const fo = goal.half * 0.45;
   const flagPole = box(0.06, 1.7, 0.06, PALETTE.woodDark);
   flagPole.position.set(goal.x + fo, goal.top + 0.85, goal.z + fo);
   g.add(flagPole);
@@ -3917,7 +3934,7 @@ function makeCourseVisual(def) {
   // 样式附饰：sea 终点岛种棕榈树；float 终点台加灯柱
   if (def.style === 'sea') {
     const goalPlat = def.platforms[def.platforms.length - 1];
-    const goalPalm = makePalm(goalPlat.x + goalPlat.half * 0.72, goalPlat.z + goalPlat.half * 0.58, 0.75, 1.1);
+    const goalPalm = makePalm(goalPlat.x + goalPlat.half * 0.45, goalPlat.z + goalPlat.half * 0.35, 0.75, 1.1);
     goalPalm.position.y = goalPlat.top;
     g.add(goalPalm);
   } else {
@@ -3929,11 +3946,9 @@ function makeCourseVisual(def) {
     group: g,
     platforms: def.platforms,
     lidPivot,
-    grandPrize,
     flag,
     goal: { x: goal.x, y: goal.top, z: goal.z, half: goal.half, opened: false },
     spawnConfetti() {
-      grandPrize.reveal(false);
       for (const m of confetti) {
         m.visible = true;
         m.position.set(goal.x, goal.top + 0.6, goal.z);
@@ -3943,7 +3958,7 @@ function makeCourseVisual(def) {
         m.material.opacity = 1;
       }
     },
-    update(dt, time = 0, player = null) {
+    update(dt) {
       for (const m of confetti) {
         if (!m.visible) continue;
         const u = m.userData;
@@ -3955,7 +3970,6 @@ function makeCourseVisual(def) {
         if (u.t > 1.1) m.material.opacity = Math.max(0, 1 - (u.t - 1.1) / 0.9);
         if (u.t > 2.1) m.visible = false;
       }
-      grandPrize.update(dt, time, player);
     }
   };
 }
