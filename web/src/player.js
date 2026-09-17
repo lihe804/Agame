@@ -496,7 +496,9 @@ export class CameraRig {
       Math.cos(this.yaw) * Math.cos(this.pitch)
     );
 
-    // 防穿墙：从角色向镜头方向打射线，命中就收近（拉远快、拉近慢的手感）
+    // 防穿墙：从角色向镜头方向打射线，命中就收近。
+    // 收近也必须限速插值（不能瞬间赋值）：射线贴着墙沿/台沿时会在“命中/未命中”
+    // 之间逐帧跳变，瞬间收近就会让镜头一帧弹进、再慢慢弹出，看起来就是抽搐。
     let d = fullDist;
     if (occluders && occluders.length) {
       this.ray.set(focus, dir);
@@ -505,8 +507,16 @@ export class CameraRig {
       this.ray.intersectObjects(occluders, false, this.rayHits);
       if (this.rayHits.length) d = Math.max(1.0, this.rayHits[0].distance - 0.3);
     }
-    // 无遮挡时平滑回到用户设定距离；被挡时立即收近
-    this.smoothDist = d < this.smoothDist ? d : this.smoothDist + (d - this.smoothDist) * Math.min(1, 3.2 * dt);
+    const snap = !this.initialized;
+    if (snap) {
+      this.smoothDist = d;
+    } else {
+      // 收近快、放远慢；差值小于 2cm 不动，避免贴墙时逐帧微抖
+      const gap = d - this.smoothDist;
+      if (Math.abs(gap) > 0.02) {
+        this.smoothDist += gap * Math.min(1, (gap < 0 ? 18 : 3.2) * dt);
+      }
+    }
 
     const desired = this._desired.set(
       focus.x + dir.x * this.smoothDist,
@@ -519,15 +529,23 @@ export class CameraRig {
     const minWater = WATER_LEVEL + 0.8;
     if (desired.y < minWater) desired.y = minWater;
 
-    if (!this.initialized) {
+    if (snap) {
+      // 出生 / 读档 / 救援：这一帧直接落位，不要从旧位置飞过来
       this.current.copy(desired);
+      this.lookAt.copy(focus);
       this.initialized = true;
     } else {
       this.current.lerp(desired, Math.min(1, 9 * dt));
+      this.lookAt.lerp(focus, Math.min(1, 10 * dt));
     }
 
     this.camera.position.copy(this.current);
-    this.lookAt.lerp(focus, this.initialized ? Math.min(1, 10 * dt) : 1);
     this.camera.lookAt(focus);
+  }
+
+  /** 出生 / 读档 / 救援后调用：下一帧直接落位（镜头距离也重置为玩家设定值），不做插值 */
+  snap() {
+    this.initialized = false;
+    this.smoothDist = this.dist;
   }
 }

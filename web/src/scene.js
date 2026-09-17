@@ -3681,6 +3681,7 @@ function makeLongCourseVisual(def) {
   updateChestVisuals();
 
   const rewardConfetti = makeLongConfetti(group);
+  let visualTime = 0; // setCourseStage 重排实例时要沿用当前视觉时间，不能归零
 
   const finalReward = rewards.find((r) => r.final) || rewards[rewards.length - 1];
   const goalPlatform = finalReward.platform;
@@ -3746,13 +3747,16 @@ function makeLongCourseVisual(def) {
         p.locked = p.stage > stage + 1;
       }
       refreshStaticLocks();
-      updateDynamicVisuals(0, true);
+      // 必须沿用当前时间：传 0 会把所有动态台（尤其是 orbit 旋转台）的朝向瞬间掰回 t=0，
+      // 每次开到阶段宝箱/存档点都会让整关“抽搐”一下。
+      updateDynamicVisuals(visualTime, true);
     },
     spawnConfetti() {
       grandPrize.reveal(false);
       rewardConfetti.spawn(finalReward, 42);
     },
     update(dt, time = 0, player = null) {
+      visualTime = time;
       updateDynamicVisuals(time);
 
       for (const reward of chestRewards) {
