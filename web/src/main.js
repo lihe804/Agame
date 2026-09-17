@@ -26,25 +26,38 @@ let qualityElapsed = 0;
 let qualityFrames = 0;
 let shadowFrame = 0;
 let shadowEvery = 2;
+let qualityCooldown = 0;   // 距上次改分辨率的时间（秒）：改分辨率会重建绘制缓冲，不能频繁来回切
+let qualityRaiseVotes = 0; // 连续两次采样都富余才提高分辨率
 function tuneRenderResolution(dt) {
   qualityElapsed += dt;
   qualityFrames++;
+  if (qualityCooldown > 0) qualityCooldown = Math.max(0, qualityCooldown - dt);
   if (qualityElapsed < 1.5) return;
 
   const fps = qualityFrames / qualityElapsed;
   const cap = Math.max(1, pixelRatioCap());
   let next = renderPixelRatio;
   if (fps < 42) {
+    // 掉帧：立即降分辨率救帧（降是一步到位，优先级高于一切）
     next = Math.max(1, renderPixelRatio - 0.15);
     shadowEvery = fps < 28 ? 4 : 3;
+    qualityRaiseVotes = 0;
   } else {
     shadowEvery = 2;
-    if (fps > 57 && renderPixelRatio < cap) next = Math.min(cap, renderPixelRatio + 0.1);
+    // 提高分辨率要求“连续两次采样都 >57fps”且距上次调整已过 3s，
+    // 否则会出现“提高→掉帧→降低→提高”的极限环，表现就是每隔几秒抽一下
+    if (fps > 57 && renderPixelRatio < cap) qualityRaiseVotes++;
+    else qualityRaiseVotes = 0;
+    if (qualityRaiseVotes >= 2 && qualityCooldown <= 0) {
+      next = Math.min(cap, renderPixelRatio + 0.1);
+    }
   }
   qualityElapsed = 0;
   qualityFrames = 0;
 
   if (Math.abs(next - renderPixelRatio) < 0.04) return;
+  qualityCooldown = 3;
+  qualityRaiseVotes = 0;
   renderPixelRatio = next;
   renderer.setPixelRatio(renderPixelRatio);
   renderer.setSize(window.innerWidth, window.innerHeight);
@@ -438,7 +451,7 @@ function enterExplore(index) {
   state.rig.yaw = 0;
   state.rig.pitch = 0.35;
   state.rig.dist = 6.0;
-  state.rig.initialized = false;
+  state.rig.snap();
 
   document.getElementById('hud-name').textContent = c.name;
   state.run.currentCourse = null;
@@ -649,7 +662,7 @@ function respawnAtFreeStart(hintMessage = null) {
   const y = terrainHeight(FREE_SPAWN.x, FREE_SPAWN.z) + 0.04;
   state.player.respawn({ x: FREE_SPAWN.x, y, z: FREE_SPAWN.z });
   state.player.group.position.copy(state.player.pos);
-  state.rig.initialized = false;
+  state.rig.snap();
   if (state.activeCourse === 'free') {
     state.run.currentCourse = null;
     state.run.checkpoint = null;
@@ -682,7 +695,7 @@ function respawnAtCheckpoint(courseId = state.activeCourse, hintMessage = null) 
     z: checkpoint.z
   });
   state.player.group.position.copy(state.player.pos);
-  state.rig.initialized = false;
+  state.rig.snap();
   hudSubEl.textContent = course.name + ' · 500 阶';
   saveProgress();
   updateScoreUI(false);
@@ -704,7 +717,7 @@ function respawnAtSeaStart() {
   const start = sea.platforms[0];
   state.player.respawn({ x: start.x, y: start.top + 0.02, z: start.z });
   state.player.group.position.copy(state.player.pos);
-  state.rig.initialized = false;
+  state.rig.snap();
   state.run.currentCourse = 'sea';
   state.run.onStart.sea = true;
   state.beach.spawnRipple(start.x, start.z);
